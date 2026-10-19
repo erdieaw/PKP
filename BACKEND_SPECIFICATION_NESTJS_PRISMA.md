@@ -1,1137 +1,262 @@
-# DOKUMEN SPESIFIKASI TEKNIS BACKEND & SPESIFIKASI API RESMI
-## Sistem Informasi Penilaian Kinerja Puskesmas (SIPKP PULSE) Berbasis ILP 2026
-**Framework**: NestJS (v11+ / v10.4+) • **ORM**: Prisma ORM (v6+) • **Database**: PostgreSQL 16+ • **Cache & Queue**: Redis 7+ (BullMQ) • **Object Storage**: MinIO (S3-Compatible)
+# Spesifikasi Implementasi Backend SIPKP
+
+Dokumen ini mendeskripsikan implementasi repository saat ini, bukan kontrak resmi pemerintah atau jaminan siap produksi. Kode, DTO, dan migrasi tertaut menjadi sumber kebenaran; skema dan kode lengkap tidak diduplikasi di sini.
+
+> **Perlu persetujuan produk/domain:** prorata sasaran tahunan, rumus `ILP_2026_V1`, ambang khusus, bobot agregasi, penanganan target nol, dan kebijakan dependency reopen masih merupakan aturan implementasi provisional. Belum ada dasar untuk menyatakan aturan ini telah divalidasi klinis atau disahkan secara resmi.
+
+## 1. Arsitektur Dan Sumber
+
+- Runtime Node.js 22; NestJS 11 dengan Express; Prisma CLI/client **6.19.3**; PostgreSQL; Redis 7; BullMQ 5; MinIO kompatibel S3.
+- [Compose aktual](backend/compose.yml) mematok **PostgreSQL16.10-alpine**, Redis7.4.5-alpine, dan MinIO `quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e`.
+- [AppModule](backend/src/app.module.ts) menyusun Core, Auth, Operations, Masters, Analytics, Integrations. Guard global berjalan Auth -> rate limit -> role.
+- [Operations](backend/src/operations/operations.service.ts) menangani master baca, Puskesmas/tahun/pengguna, reset password terkelola, target, assignment, input, workflow, rekomendasi, dan audit. [Masters](backend/src/master/masters.service.ts) menangani mutasi katalog global.
+- [Analytics](backend/src/analytics/analytics.service.ts) membaca live DB/snapshot dan menghitung skor; tidak memakai cache Redis atau tabel skor agregat prahitung.
+- [Integrations](backend/src/integrations/integrations.service.ts) menangani signed URL dan readiness; [ExportService](backend/src/integrations/export.service.ts) menjalankan producer dan worker dalam proses aplikasi yang sama, concurrency 2.
+- Redis dipakai untuk fixed-window rate limit dan antrean ekspor, bukan penyimpanan session atau refresh-token blacklist.
+- Frontend React/Vite sudah terintegrasi melalui [apiClient](src/services/apiClient.ts) dan [apiStore](src/services/apiStore.ts): auth, master, target, assignment, input bulanan, workflow, rekomendasi, audit, analytics, evidence dan export menggunakan API nyata. Boundary menormalisasi Decimal tanpa mengubah null menjadi nol; skor dihitung backend, bukan mock browser.
+- Panduan eksekusi aplikasi/deployment: [README root](README.md), detail backend: [backend/README.md](backend/README.md). Rincian lokal: [database](backend/prisma/README.md), [operations](backend/src/operations/README.md), [analytics](backend/src/analytics/README.md).
+
+### Integrasi Frontend
+
+- Prasyarat lokal Node.js22+, npm dan Docker Compose. Root memiliki `bun.lock`, bukan `package-lock.json`: gunakan `bun install --frozen-lockfile`, atau `npm install` (membuat npm lockfile baru), bukan `npm ci` root. Backend memakai `npm --prefix backend ci`.
+- Dari root: `node backend/scripts/local.mjs`, lalu script backend `prisma:generate`, `db:deploy`, `db:seed`, `build` dan `start`. Script lokal membuat env privat/secrets acak hanya bila belum ada, menyalakan dependency dan menyiapkan bucket privat, bukan membuat akun default. Admin pertama memerlukan `BOOTSTRAP_ADMIN_USERNAME` dan `BOOTSTRAP_ADMIN_PASSWORD` eksplisit minimal12karakter pada env privat sebelum seed ulang; tidak ada password bootstrap/demo default.
+- `npm run dev` root menjalankan Vite pada **5175 strict port**, proxy `/api/v1` ke backend **4000**. API `/api/v1`, Swagger opsional `/api/docs`. App container alternatif: `docker compose --env-file backend/.env -f backend/compose.yml --profile app up -d --build`, setelah migrasi/seed host; jangan jalankan bersama server host pada port sama.
+- [`VITE_API_BASE_URL`](.env.example) default `/api/v1`. Deployment harus reverse-proxy path ini ke backend dan melayani `dist/` dengan SPA fallback untuk frontend, bukan API; proxy dev Vite tidak terbawa build. URL absolut opsional memerlukan CORS backend `FRONTEND_URL` exact origin. Endpoint storage publik dan CORS storage tetap harus dikonfigurasi untuk signed upload/download. Contoh Nginx dan batas trust proxy ada di README root.
+- Client menyimpan **refresh token saja di sessionStorage**, access token hanya di memori. Restore memakai refresh dan `/auth/me`; refresh/retry401, logout dan ganti password memakai session backend. Runtime tidak menyimpan password plaintext atau skor/data operasional di browser storage. Argumen remember bukan persistensi tambahan. Backend tetap authoritative untuk identity/role.
+- Store membersihkan data scoped dan abort read lama saat user/tenant/tahun berubah, memakai generation/scope identity untuk menolak respons stale. Pending write memblokir pergantian lingkup. Error, loading, missing/null dan status snapshot diteruskan ke UI, bukan diganti data mock/sukses palsu.
+- Dinkes bootstrap tanpa tenant dapat membuka master global dan membuat Puskesmas pertama, lalu memilih tenant untuk manajemen akun. Ini perilaku implementasi, bukan klaim cakupan test bootstrap UI lingkungan kosong.
+- CRUD indikator/section global tersedia bagi `ADMIN_PUSKESMAS` dan `DINKES_ADMIN`, termasuk archive/restore. Dinkes membuat/mengarsipkan Puskesmas; admin mengedit profil tenant sendiri. Kedua administrator membuat tahun/mengedit cutoff; lock/delete hanya Dinkes. Hapus akun berarti deaktivasi `INACTIVE`. Rollover belum tersedia; bridge tidak diubah menjadi sukses simulasi atau status SYNCED.
+- [`mockState.ts`](src/services/mockState.ts) tidak diimpor runtime aplikasi. File legacy dipertahankan sebagai sumber metadata section importer katalog offline bersama `src/data/indicators.ts`; importer menghasilkan JSON seed tanpa history/pencapaian mock. Import ulang katalog bukan startup rutin.
+
+## 2. Database Dan Katalog
+
+Sumber struktur: [schema.prisma](backend/prisma/schema.prisma). Sumber CHECK/trigger: [migrasi initial](backend/prisma/migrations/20261018000000_initial/migration.sql). Migrasi tambahan [`20261019000000_section_is_active`](backend/prisma/migrations/20261019000000_section_is_active/migration.sql) telah dideploy, menambahkan status aktif section. Jalankan `migrate deploy` di setiap environment, bukan `db push` yang tidak membawa proteksi SQL-only.
+
+- Ada 14 tabel: `health_centers`, `users`, `sessions`, `year_periods`, `sections`, `indicators`, `annual_targets`, `pic_assignments`, `monthly_records`, `period_locks`, `uploads`, `recommendations`, `audit_logs`, `export_jobs`.
+- Nama tabel snake_case; kolom camelCase. UUID dibuat Prisma. ID indikator dan kode section adalah string, bukan UUID.
+- Baseline awal katalog seed berisi **272 indikator operasional**, **68 sections: 29 top-level + 39 nested**, dalam 5 klaster. Sepuluh artefak header Excel tidak diimpor. Jumlah runtime dan kelengkapan submit mengikuti katalog aktif secara dinamis, bukan hardcoded272.
+- Tidak ada indikator head persisten. Head klaster pada Sheet 7 adalah baris presentasi sintetis; top-level section memiliki `parentCode=null`, bukan node root klaster.
+- [Importer](backend/scripts/import-catalogue.mjs) menghasilkan [catalogue.json](backend/prisma/seed-data/catalogue.json), membuang pencapaian/history mock. Leluhur tanpa label memakai `Subbagian <code>`.
+- Katalog API global dapat dibuat/diedit/diarsipkan/dipulihkan oleh kedua role administrator. Seed existing section/indikator menggunakan `update: {}`: perubahan manual, label dan arsip tidak direset; hanya identity yang belum ada ditambahkan. Perubahan definisi lewat API tetap memerlukan review domain dan aturan versi di bawah.
+- Unique identity: target/assignment per tenant-indikator-tahun; record per tenant-indikator-tahun-bulan; lock per tenant-tahun-nomor-jenis; rekomendasi per tenant-tahun-quarter-section.
+- CHECK SQL mencakup tenant sesuai role, angka nonnegatif, bulan 1..12, quarter 1..4, tahun 2000..9999, cutoff 1..28, score 0..100; persentase capaian boleh >100. Ekspor menyimpan quarter 0 untuk ANNUAL.
+- Foreign key umumnya RESTRICT; session CASCADE saat pengguna dihapus. `updatedBy`/`reviewedBy` adalah string, bukan FK pengguna.
+- Trigger mencegah perubahan identity target, record, assignment, lock, rekomendasi, upload; reassignment PIC tetap diizinkan. Audit menolak UPDATE, DELETE, **TRUNCATE**.
+- **Tidak ada RLS** atau Prisma middleware tenant otomatis; isolasi tenant tetap melalui scope service eksplisit. Trigger `monthly_records_guard` menolak INSERT/UPDATE/DELETE pada tahun terkunci atau bulan terlindungi SUBMITTED/VERIFIED, dengan row lock tahun lalu periode.
+- Trigger `annual_targets_guard` melindungi target locked dan tahun/periode terlindungi; perubahan lock-only false->true diizinkan khusus tanpa perubahan isi. Service hanya mengunci target `isLocked=false`, sehingga lock berulang dan submit periode berikutnya tidak mencoba mengubah target yang sudah locked.
+- Trigger assignment memvalidasi PIC aktif tenant sama. Trigger upload membolehkan perubahan key/etag hanya pada PENDING->READY dan status berikutnya READY->ATTACHED; identitas file tetap immutable. Tidak ada trigger yang membuat seluruh snapshot/semua tabel otomatis WORM.
+- Snapshot terlindungi lewat API dan pembacaan historis, bukan jaminan anti-perubahan oleh pemilik DB. Role runtime wajib non-owner/least-privilege, tanpa hak menonaktifkan trigger atau mengubah skema.
+
+## 3. Konvensi HTTP, Validasi, Dan Error
+
+Semua route endpoint di bawah ditulis **relatif terhadap base `/api/v1`**: misalnya `/auth/login` berarti `http://localhost:4000/api/v1/auth/login`. Prefix global juga berlaku untuk health. Swagger tetap `/api/docs` ketika `ENABLE_SWAGGER=true`, bukan `/api/v1/api/docs`; anotasi bukan pengganti DTO dan service aktual.
+
+Semua route kecuali login, refresh, `/health`, `/health/ready` memerlukan `Authorization: Bearer <accessToken>`. GET/PATCH/PUT normal 200; POST normal 201 kecuali override yang disebutkan.
 
----
-
-## DAFTAR ISI
-1. [Arsitektur Sistem & Blueprint Keamanan](#1-arsitektur-sistem--blueprint-keamanan)
-2. [Prisma Schema Lengkap (`schema.prisma`)](#2-prisma-schema-lengkap-schemaprisma)
-3. [Arsitektur Keamanan & Isolasi Multi-Tenant](#3-arsitektur-keamanan--isolasi-multi-tenant)
-4. [Integrasi Redis (Caching & Background Queue)](#4-integrasi-redis-caching--background-queue)
-5. [Integrasi Object Storage MinIO](#5-integrasi-object-storage-minio)
-6. [Spesifikasi Lengkap REST API (OpenAPI/Swagger Format)](#6-spesifikasi-lengkap-rest-api)
-   * [6.1 Authentication & Profile Module](#61-authentication--profile-module)
-   * [6.2 Master Data Management Module](#62-master-data-management-module)
-   * [6.3 User, Admin PKM & Staff PIC Module](#63-user-admin-pkm--staff-pic-module)
-   * [6.4 Target Sasaran Tahunan Module](#64-target-sasaran-tahunan-module)
-   * [6.5 Input Capaian & Rekam Kinerja Bulanan Module](#65-input-capaian--rekam-kinerja-bulanan-module)
-   * [6.6 Workflow Verifikasi & Penguncian Periode Module](#66-workflow-verifikasi--penguncian-periode-module)
-   * [6.7 Analitik Skor, Nilai Resmi Sheet 7 & Dasbor Tahunan 12 Bulan](#67-analitik-skor-nilai-resmi-sheet-7--dasbor-tahunan-12-bulan)
-   * [6.8 Supervisi Dinkes, Rekomendasi & RTL Module](#68-supervisi-dinkes-rekomendasi--rtl-module)
-   * [6.9 Object Storage & Bukti Dukung (MinIO) Module](#69-object-storage--bukti-dukung-minio-module)
-   * [6.10 Ekspor Laporan & Background Jobs Module](#610-ekspor-laporan--background-jobs-module)
-   * [6.11 Provincial Bridge Sync Module](#611-provincial-bridge-sync-module)
-   * [6.12 Audit Log & Aktivitas Module](#612-audit-log--aktivitas-module)
-7. [Struktur Direktori NestJS & Konfigurasi Docker Compose](#7-struktur-direktori-nestjs--konfigurasi-docker-compose)
-
----
-
-## 1. Arsitektur Sistem & Blueprint Keamanan
-
-```mermaid
-flowchart TD
-    Client["Frontend SPA (React + Vite)"] -->|HTTPS / TLS 1.3| Nginx["Nginx Reverse Proxy & WAF"]
-    Nginx -->|Proxy Pass| NestJS["NestJS Backend Application (Node.js/Bun)"]
-    
-    subgraph "NestJS Application Core"
-        Guard["Auth & Multi-Tenant Guard"]
-        Throttler["Redis Throttler (Rate Limit)"]
-        Modules["Controllers & Services"]
-        PrismaService["Prisma ORM Client"]
-        QueueProducer["BullMQ Queue Producer"]
-    end
-    
-    NestJS --> Guard
-    Guard --> Throttler
-    Throttler --> Modules
-    Modules --> PrismaService
-    Modules --> QueueProducer
-    
-    subgraph "Data & Infrastructure Tier"
-        Postgres[("PostgreSQL 16 (Master DB)")]
-        Redis[("Redis 7 (Cache, Sessions & BullMQ)")]
-        MinIO[("MinIO Cluster (S3 Storage)")]
-        BullWorker["BullMQ Worker (PDF/Excel Generator)"]
-    end
-    
-    PrismaService -->|Connection Pool| Postgres
-    Modules -->|Cache & Rate Limit| Redis
-    QueueProducer -->|Dispatch Jobs| Redis
-    Redis -->|Consume Jobs| BullWorker
-    BullWorker -->|Save Generated Files| MinIO
-    Modules -->|Presigned URLs| MinIO
-    
-    subgraph "External Integration"
-        ProvincialAPI["Server Bridge SIPKP Provinsi Jatim"]
-    end
-    
-    BullWorker -->|Batch REST Sync| ProvincialAPI
-```
-
-### Standar Kepatuhan & Jaminan Keamanan:
-1. **Multi-Tenancy Isolation**: Pengguna Puskesmas (Admin PKM & PIC) secara ketat dibatasi hanya pada data `healthCenterId` masing-masing melalui Prisma Middleware & NestJS ExecutionContext Scope. Dinas Kesehatan memiliki cakupan supervisi lintas wilayah (*cross-tenant read & review*).
-2. **Immutability of Historical Audits**: Periode yang berstatus `SUBMITTED` atau `VERIFIED` dikunci secara otomatis di tingkat database. Mutasi data ditolak oleh *State Machine Guard*.
-3. **Protection of Credentials**: Password di-hash menggunakan **Argon2id**. Token otorisasi menggunakan *dual-token pattern*: Access Token JWT (masa aktif 15 menit) dan Refresh Token terenkripsi dengan daftar pencabutan (*revocation list*) di Redis.
-4. **Presigned Object Security**: File bukti dukung PDF/Gambar tidak diunggah langsung melalui thread HTTP NestJS, melainkan menggunakan presigned URL MinIO bertanda tangan waktu singkat (300 detik) untuk menghemat memori server dan membatasi ukuran payload maksimal 10 MB per berkas.
-
----
-
-## 2. Prisma Schema Lengkap (`schema.prisma`)
-
-Berikut adalah berkas `schema.prisma` yang siap digunakan untuk produksi:
-
-```prisma
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
-
-generator client {
-  provider = "prisma-client-js"
-}
-
-// ==================== ENUMS ====================
-
-enum UserRole {
-  DINKES_ADMIN
-  ADMIN_PUSKESMAS
-  PIC
-}
-
-enum UserStatus {
-  ACTIVE
-  INACTIVE
-  SUSPENDED
-}
-
-enum TargetPolarity {
-  HIGHER_IS_BETTER
-  LOWER_IS_BETTER
-  TIERED_BRACKETS
-  BINARY
-}
-
-enum PeriodStatus {
-  DRAFT
-  SUBMITTED
-  VERIFIED
-  REVISION_REQUIRED
-}
-
-enum SyncStatus {
-  NOT_SYNCED
-  PENDING_SYNC
-  SYNCED
-  SYNC_FAILED
-}
-
-// ==================== MASTER ENTITIES ====================
-
-model HealthCenter {
-  id          String       @id @default(uuid())
-  code        String       @unique // e.g. P35070101
-  name        String       // e.g. Puskesmas Kebonagung
-  address     String?
-  district    String       // e.g. Kabupaten Malang
-  headName    String?      // e.g. dr. H. Rahmat Hidayat, M.Kes
-  headNip     String?      // e.g. 19750812 200212 1 003
-  phone       String?
-  email       String?
-  isActive    Boolean      @default(true)
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-
-  users       User[]
-  targets     AnnualTarget[]
-  records     MonthlyRecord[]
-  locks       PeriodLock[]
-  assignments PicAssignment[]
-  recommendations Recommendation[]
-  auditLogs   AuditLog[]
-
-  @@map("health_centers")
-}
-
-model User {
-  id              String        @id @default(uuid())
-  healthCenterId  String?
-  healthCenter    HealthCenter? @relation(fields: [healthCenterId], references: [id], onDelete: Restrict)
-  username        String        @unique
-  email           String?       @unique
-  name            String
-  nip             String?
-  passwordHash    String
-  role            UserRole
-  status          UserStatus    @default(ACTIVE)
-  phone           String?
-  avatarUrl       String?
-  lastLoginAt     DateTime?
-  refreshTokenHash String?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
-
-  assignedPics    PicAssignment[]
-  auditLogs       AuditLog[]
-  submittedLocks  PeriodLock[]  @relation("SubmittedBy")
-  verifiedLocks   PeriodLock[]  @relation("VerifiedBy")
-
-  @@index([role, healthCenterId])
-  @@map("users")
-}
-
-model YearPeriod {
-  year        Int       @id // e.g. 2026
-  description String?
-  cutoffDay   Int       @default(10) // Tgl 10 per bulan
-  isLocked    Boolean   @default(false)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-
-  targets     AnnualTarget[]
-  records     MonthlyRecord[]
-  locks       PeriodLock[]
-  assignments PicAssignment[]
-  recommendations Recommendation[]
-
-  @@map("year_periods")
-}
-
-model Klaster {
-  id          Int          @id // 1, 2, 3, 4, 5
-  code        String       @unique // K1, K2, K3, K4, K5
-  name        String       // e.g. Klaster 1: Manajemen Puskesmas
-  description String?
-  order       Int          @default(0)
-
-  subKlasters SubKlaster[]
-  indicators  Indicator[]
-
-  @@map("klasters")
-}
-
-model SubKlaster {
-  id          String       @id @default(uuid())
-  klasterId   Int
-  klaster     Klaster      @relation(fields: [klasterId], references: [id], onDelete: Cascade)
-  code        String       @unique // e.g. "1.1", "2.1", "2.2.5"
-  name        String       // e.g. Manajemen Inti Puskesmas
-  order       Int          @default(0)
-
-  indicators  Indicator[]
-  recommendations Recommendation[]
-
-  @@index([klasterId])
-  @@map("sub_klasters")
-}
-
-model Indicator {
-  id                  String         @id // e.g. "K1-R8", "K2-R50"
-  klasterId           Int
-  klaster             Klaster        @relation(fields: [klasterId], references: [id], onDelete: Restrict)
-  subKlasterCode      String
-  subKlaster          SubKlaster     @relation(fields: [subKlasterCode], references: [code], onDelete: Restrict)
-  no                  String         // e.g. "1.1.1", "1.", "15."
-  kegiatan            String         // Uraian Kegiatan resmi
-  indikator           String         // Nama Indikator Kinerja
-  satuan              String         // dokumen, balita, %, bumil, dll
-  targetDisplay       String         // "1.0", "≥ 90%", "< 15%"
-  targetNumeric       Decimal        @db.Decimal(10, 4) // Nilai target baku desimal (e.g. 1.0, 0.90, 0.15)
-  totalSasaranDefault Decimal        @default(0) @db.Decimal(12, 2)
-  targetSasaranDefault Decimal       @default(0) @db.Decimal(12, 2)
-  polarity            TargetPolarity @default(HIGHER_IS_BETTER)
-  isHead              Boolean        @default(false) // Jika Head, nilai dihitung otomatis dari child
-  parentIndicatorId   String?
-  parentIndicator     Indicator?     @relation("ChildIndicators", fields: [parentIndicatorId], references: [id])
-  childIndicators     Indicator[]    @relation("ChildIndicators")
-  formulaRaw          String?        // Rumus excel provinsi asli
-  notes               String?        // Petunjuk teknis kolom L
-  createdAt           DateTime       @default(now())
-  updatedAt           DateTime       @updatedAt
-
-  targets             AnnualTarget[]
-  monthlyRecords      MonthlyRecord[]
-  assignments         PicAssignment[]
-
-  @@index([klasterId, subKlasterCode])
-  @@map("indicators")
-}
-
-// ==================== OPERATIONAL DATA ====================
-
-model AnnualTarget {
-  id             String       @id @default(uuid())
-  healthCenterId String
-  healthCenter   HealthCenter @relation(fields: [healthCenterId], references: [id], onDelete: Cascade)
-  indicatorId    String
-  indicator      Indicator    @relation(fields: [indicatorId], references: [id], onDelete: Cascade)
-  year           Int
-  yearPeriod     YearPeriod   @relation(fields: [year], references: [year], onDelete: Cascade)
-  targetPct      Decimal      @db.Decimal(8, 2) // e.g. 100.00
-  totalSasaran   Decimal      @db.Decimal(12, 2) // Sasaran riil setahun
-  targetSasaran  Decimal      @db.Decimal(12, 2) // Target riil setahun
-  isLocked       Boolean      @default(false)
-  updatedBy      String?
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
-
-  @@unique([healthCenterId, indicatorId, year])
-  @@index([healthCenterId, year])
-  @@map("annual_targets")
-}
-
-model PicAssignment {
-  id             String       @id @default(uuid())
-  healthCenterId String
-  healthCenter   HealthCenter @relation(fields: [healthCenterId], references: [id], onDelete: Cascade)
-  indicatorId    String
-  indicator      Indicator    @relation(fields: [indicatorId], references: [id], onDelete: Cascade)
-  year           Int
-  yearPeriod     YearPeriod   @relation(fields: [year], references: [year], onDelete: Cascade)
-  picUserId      String
-  picUser        User         @relation(fields: [picUserId], references: [id], onDelete: Restrict)
-  assignedAt     DateTime     @default(now())
-  assignedBy     String?
-
-  @@unique([healthCenterId, indicatorId, year])
-  @@index([healthCenterId, year, picUserId])
-  @@map("pic_assignments")
-}
-
-model MonthlyRecord {
-  id              String       @id @default(uuid())
-  healthCenterId  String
-  healthCenter    HealthCenter @relation(fields: [healthCenterId], references: [id], onDelete: Cascade)
-  indicatorId     String
-  indicator       Indicator    @relation(fields: [indicatorId], references: [id], onDelete: Restrict)
-  year            Int
-  yearPeriod      YearPeriod   @relation(fields: [year], references: [year], onDelete: Cascade)
-  month           Int          // 1..12
-  
-  // Realisasi
-  pencapaianRiil  Decimal      @default(0) @db.Decimal(12, 2) // Numerator input
-  totalSasaran    Decimal      @default(0) @db.Decimal(12, 2) // Denominator alokasi bulan
-  targetSasaran   Decimal      @default(0) @db.Decimal(12, 2) // Target sasaran bulan
-  capaianRiilPct  Decimal      @default(0) @db.Decimal(8, 2)  // % Capaian terhadap target
-  nilaiKinerja    Decimal      @default(0) @db.Decimal(8, 2)  // Nilai resmi berbobot (0-100)
-  
-  // Bukti Dukung & Catatan
-  evidenceUrl     String?      // MinIO S3 Object Key
-  evidenceName    String?      // Original file name
-  evidenceSize    Int?         // File size in bytes
-  notes           String?      // Keterangan kendala / analisa masalah
-
-  // Integrasi & Status
-  isSubmitted     Boolean      @default(false)
-  syncStatus      SyncStatus   @default(NOT_SYNCED)
-  syncedAt        DateTime?
-  syncBatchId     String?
-  updatedBy       String?
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
-
-  @@unique([healthCenterId, indicatorId, year, month])
-  @@index([healthCenterId, year, month])
-  @@index([indicatorId, year, month])
-  @@map("monthly_records")
-}
-
-model PeriodLock {
-  id              String       @id @default(uuid())
-  healthCenterId  String
-  healthCenter    HealthCenter @relation(fields: [healthCenterId], references: [id], onDelete: Cascade)
-  year            Int
-  yearPeriod      YearPeriod   @relation(fields: [year], references: [year], onDelete: Cascade)
-  periodNumber    Int          // Bulan 1..12 atau Triwulan 1..4
-  isQuarter       Boolean      @default(false)
-  status          PeriodStatus @default(DRAFT)
-  
-  submittedAt     DateTime?
-  submittedById   String?
-  submittedBy     User?        @relation("SubmittedBy", fields: [submittedById], references: [id])
-  
-  verifiedAt      DateTime?
-  verifiedById    String?
-  verifiedBy      User?        @relation("VerifiedBy", fields: [verifiedById], references: [id])
-  
-  revisionNote    String?
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
-
-  @@unique([healthCenterId, year, periodNumber, isQuarter])
-  @@map("period_locks")
-}
-
-model Recommendation {
-  id                  String       @id @default(uuid())
-  healthCenterId      String
-  healthCenter        HealthCenter @relation(fields: [healthCenterId], references: [id], onDelete: Cascade)
-  year                Int
-  yearPeriod          YearPeriod   @relation(fields: [year], references: [year], onDelete: Cascade)
-  quarter             Int          // 1, 2, 3, 4
-  subKlasterCode      String
-  subKlaster          SubKlaster   @relation(fields: [subKlasterCode], references: [code], onDelete: Restrict)
-  scoreAchieved       Decimal      @db.Decimal(8, 2)
-  recommendationText  String       // Umpan balik tim pembina Dinkes
-  analisisPenyebab    String?      // Root Cause Analysis Puskesmas
-  actionPlanText      String?      // Rencana Tindak Lanjut (RTL) Puskesmas
-  targetPenyelesaian  String?
-  picName             String?
-  statusFollowUp      String       @default("Belum Ditindaklanjuti") // Belum Ditindaklanjuti, Sedang Berjalan, Selesai
-  reviewedBy          String?      // Auditor Dinkes
-  reviewedAt          DateTime?
-  createdAt           DateTime     @default(now())
-  updatedAt           DateTime     @updatedAt
-
-  @@unique([healthCenterId, year, quarter, subKlasterCode])
-  @@map("recommendations")
-}
-
-model AuditLog {
-  id              String        @id @default(uuid())
-  healthCenterId  String?
-  healthCenter    HealthCenter? @relation(fields: [healthCenterId], references: [id], onDelete: SetNull)
-  userId          String?
-  user            User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
-  actorName       String
-  action          String        // e.g. "Input Capaian", "Pengajuan Verifikasi", "Ubah Password"
-  details         String
-  ipAddress       String?
-  userAgent       String?
-  createdAt       DateTime      @default(now())
-
-  @@index([healthCenterId, createdAt])
-  @@index([userId, createdAt])
-  @@map("audit_logs")
-}
-```
-
----
-
-## 3. Arsitektur Keamanan & Isolasi Multi-Tenant
-
-### 3.1 Multi-Tenant Isolation Middleware (Prisma Extension)
-Untuk memastikan staf Puskesmas tidak dapat melihat atau memanipulasi data Puskesmas lain secara tidak sengaja (*data leakage*), digunakan **Prisma Client Extension** yang memanfaatkan `AsyncLocalStorage` (NestJS `ClsModule`):
-
-```typescript
-// src/common/prisma/tenant-scope.extension.ts
-import { Prisma } from '@prisma/client';
-import { ClsService } from 'nestjs-cls';
-
-export const createTenantScopeExtension = (cls: ClsService) => {
-  return Prisma.defineExtension((client) => {
-    return client.$extends({
-      query: {
-        $allModels: {
-          async $allOperations({ model, operation, args, query }) {
-            const tenantId = cls.get<string>('tenantId');
-            const userRole = cls.get<string>('userRole');
-
-            // Model dengan isolasi per Puskesmas
-            const tenantScopedModels = [
-              'MonthlyRecord',
-              'AnnualTarget',
-              'PicAssignment',
-              'PeriodLock',
-              'Recommendation'
-            ];
-
-            if (userRole !== 'DINKES_ADMIN' && tenantScopedModels.includes(model)) {
-              if (operation === 'findMany' || operation === 'findFirst' || operation === 'count') {
-                args.where = { ...args.where, healthCenterId: tenantId };
-              }
-              if (operation === 'create' || operation === 'createMany') {
-                if (args.data) {
-                  args.data = Array.isArray(args.data) 
-                    ? args.data.map(d => ({ ...d, healthCenterId: tenantId }))
-                    : { ...args.data, healthCenterId: tenantId };
-                }
-              }
-              if (operation === 'update' || operation === 'updateMany' || operation === 'delete') {
-                args.where = { ...args.where, healthCenterId: tenantId };
-              }
-            }
-
-            return query(args);
-          },
-        },
-      },
-    });
-  });
-};
-```
-
-### 3.2 Period Lock Guard (State Machine)
-Mencegah mutasi data ketika periode telah diajukan ke Dinkes atau telah diverifikasi:
-
-```typescript
-// src/common/guards/period-not-locked.guard.ts
-@Injectable()
-export class PeriodNotLockedGuard implements CanActivate {
-  constructor(private prisma: PrismaService, private cls: ClsService) {}
-
-  async canActivate(context: ExecutionContext): Promise<boolean> {
-    const req = context.switchToHttp().getRequest();
-    const { year, month } = req.body || req.query;
-    const healthCenterId = this.cls.get<string>('tenantId');
-
-    const lock = await this.prisma.periodLock.findUnique({
-      where: {
-        healthCenterId_year_periodNumber_isQuarter: {
-          healthCenterId,
-          year: Number(year),
-          periodNumber: Number(month),
-          isQuarter: false
-        }
-      }
-    });
-
-    if (lock && (lock.status === 'SUBMITTED' || lock.status === 'VERIFIED')) {
-      throw new ForbiddenException(
-        `Periode ${year} Bulan ${month} sedang berstatus [${lock.status}] dan terkunci. Perubahan data ditolak.`
-      );
-    }
-
-    return true;
-  }
-}
-```
-
----
-
-## 4. Integrasi Redis (Caching & Background Queue)
-
-### 4.1 Caching Layer
-* **Indikator Master & Formula**: Disimpan di Redis dengan TTL 24 jam (`pkp:cache:master:indicators`). Di-invalidate secara manual hanya bila Dinkes melakukan perubahan master.
-* **Sheet 7 Precomputed Scores**: Disimpan di Redis dengan key `pkp:cache:sheet7:{pkmId}:{year}:{quarter}` (TTL 1 jam). Dihapus seketika saat ada input capaian baru (`monthly_records.upsert`).
-* **Rate Limiting (DDoS Prevention)**: Menggunakan `@nestjs/throttler` berbasis Redis:
-  * Route `/auth/login`: Maksimal 5 percobaan per menit per IP.
-  * Route Operasional Data: Maksimal 120 request per menit per User.
-
-### 4.2 BullMQ Queue Architecture
-Memisahkan proses berat (PDF generation, Excel workbook assembly, dan Provinsi HTTP Bridge) dari event loop utama:
-
-```typescript
-// src/jobs/queues.ts
-export const QUEUES = {
-  EXCEL_EXPORT: 'pkp-excel-export-queue',
-  PDF_BERITA_ACARA: 'pkp-pdf-export-queue',
-  PROVINCIAL_SYNC: 'pkp-provincial-sync-queue',
-};
-```
-
----
-
-## 5. Integrasi Object Storage MinIO
-
-### 5.1 MinIO Service Specification
-Backend menyediakan upload bukti dukung (*evidence*) menggunakan **Presigned S3 URLs**:
-
-1. Klien mengirim `POST /api/v1/storage/presigned-upload` dengan metadata berkas (nama, ukuran, MIME type).
-2. Backend memvalidasi ekstensi (hanya `.pdf`, `.jpg`, `.jpeg`, `.png`, `.xlsx`), ukuran maksimal (10 MB), dan hak akses.
-3. Backend mengembalikan Presigned PUT URL bertanda tangan HMAC-SHA256 dengan masa berlaku 300 detik.
-4. Klien mengunggah berkas biner secara langsung ke MinIO via HTTP PUT.
-5. Klien mengirim `PUT /api/v1/records/monthly` dengan menyertakan `evidenceKey` yang valid.
-
-```typescript
-// src/modules/storage/storage.service.ts
-@Injectable()
-export class StorageService {
-  private s3Client: S3Client;
-  private bucketName = process.env.MINIO_BUCKET_NAME || 'pkp-evidence';
-
-  constructor() {
-    this.s3Client = new S3Client({
-      endpoint: process.env.MINIO_ENDPOINT, // e.g. http://minio:9000
-      region: 'us-east-1',
-      credentials: {
-        accessKeyId: process.env.MINIO_ACCESS_KEY,
-        secretAccessKey: process.env.MINIO_SECRET_KEY,
-      },
-      forcePathStyle: true,
-    });
-  }
-
-  async generatePresignedUploadUrl(healthCenterCode: string, year: number, month: number, filename: string, mimeType: string) {
-    const cleanName = filename.replace(/[^a-zA-Z0-9.-]/g, '_');
-    const objectKey = `${year}/${healthCenterCode}/M${month}/${Date.now()}_${cleanName}`;
-
-    const command = new PutObjectCommand({
-      Bucket: this.bucketName,
-      Key: objectKey,
-      ContentType: mimeType,
-    });
-
-    const uploadUrl = await getSignedUrl(this.s3Client, command, { expiresIn: 300 });
-    return { uploadUrl, objectKey };
-  }
-}
-```
-
----
-
-## 6. Spesifikasi Lengkap REST API
-
-Semua respons API menggunakan standar amplop JSON terpadu:
 ```json
-{
-  "success": true,
-  "statusCode": 200,
-  "message": "Operasi berhasil dieksekusi",
-  "data": { ... },
-  "meta": { "timestamp": "2026-10-18T20:30:00.000Z" }
-}
+{"success":true,"statusCode":200,"data":{},"meta":{"timestamp":"ISO-8601"}}
 ```
 
----
-
-### 6.1 Authentication & Profile Module
-
-#### 1. `POST /api/v1/auth/login`
-* **Deskripsi**: Autentikasi kredensial pengguna (Dinkes, Admin Puskesmas, PIC).
-* **Akses**: Publik (Dibatasi Throttler: 5 request/menit).
-* **Request Body**:
 ```json
-{
-  "username": "admin.kebonagung",
-  "password": "PasswordResmi2026!",
-  "role": "ADMIN_PUSKESMAS"
-}
-```
-* **Response (200 OK)**:
-```json
-{
-  "success": true,
-  "data": {
-    "accessToken": "eyJhbGciOiJIUzI1NiIsIn...",
-    "refreshToken": "d8e9f2a1b3c4...",
-    "expiresIn": 900,
-    "user": {
-      "id": "usr-1234",
-      "name": "dr. H. Rahmat Hidayat, M.Kes",
-      "username": "admin.kebonagung",
-      "nip": "19750812 200212 1 003",
-      "role": "ADMIN_PUSKESMAS",
-      "healthCenter": {
-        "id": "pkm-1",
-        "code": "P35070101",
-        "name": "Puskesmas Kebonagung"
-      }
-    }
-  }
-}
+{"success":false,"statusCode":409,"message":"...","error":"ConflictException","meta":{"timestamp":"ISO-8601"}}
 ```
 
-#### 2. `POST /api/v1/auth/refresh`
-* **Deskripsi**: Rotasi Access Token menggunakan Refresh Token.
-* **Request Body**: `{ "refreshToken": "d8e9f2a1b3c4..." }`
-* **Response (200 OK)**: Mengembalikan pair token baru.
+`data` di bagian endpoint adalah payload **di dalam envelope**. `message` error bisa string atau array validasi; nama `error` mengikuti exception/mapping, tidak selalu label HTTP standar. Decimal Prisma pada resource mentah dapat berupa string JSON; metrik analytics yang diformat berupa number/null.
 
-#### 3. `PATCH /api/v1/auth/change-password`
-* **Deskripsi**: Mengubah kata sandi pengguna yang sedang login.
-* **Auth**: Bearer JWT.
-* **Request Body**:
-```json
-{
-  "oldPassword": "PasswordLama123!",
-  "newPassword": "PasswordBaruKuat2026#",
-  "confirmNewPassword": "PasswordBaruKuat2026#"
-}
-```
+- ValidationPipe melakukan transform eksplisit, whitelist, menolak field asing dan unknown object. Tidak ada konversi implicit umum untuk boolean/angka body.
+- Operations: field opsional menolak null kecuali `evidenceId`; bulk1..2000, ID unik; pagination maksimum500; angka finite nonnegatif maksimum4 desimal. DTO Masters mengizinkan null pada formulaRaw/notes dan parentCode sesuai kontraknya. DTO auth/analytics/integrations memakai beberapa `IsOptional`, jadi jangan mengasumsikan aturan null identik lintas modul.
+- `healthCenterId`, user/resource ID memakai UUID; `indicatorId`/`sectionCode` string 1..100. Tahun operations DTO 1..9999, tetapi CHECK SQL mulai 2000; analytics/storage/export 2000..2100. Jangan bergantung pada range DTO yang lebih longgar daripada DB.
+- 400: DTO/field asing, tenant eksplisit hilang, referensi/indikator invalid, target turunan tidak konsisten, file invalid, versi scoring tidak didukung.
+- 401: kredensial/token/session invalid, expired/revoked, pengguna/tenant tidak aktif. 403: role/tenant/assignment tidak berhak.
+- 404: resource scoped tidak ditemukan atau tahun belum dibuat. 409: duplicate, tahun/periode/target terkunci, target sudah memiliki record, revision stale, dependency overlap, snapshot invalid, upload expired/belum ready.
+- 413: parser request >1 MiB; 429: rate limit; 503: DB/Redis/storage/queue unavailable atau bridge belum tersedia; error tak terpetakan 500 dengan pesan generik.
+- Filter memetakan Prisma P2002 ->409, P2003 ->400, P2025 ->404, P2034 ->409. Error CHECK/trigger lain tidak memiliki kontrak domain spesifik dan bisa dipetakan generik.
+- Konflik workflow memakai filter khusus yang meneruskan daftar `dependencies` terstruktur pada respons409.
 
----
+## 4. Tenant Dan Otorisasi
 
-### 6.2 Master Data Management Module
+Alias dokumentasi: **D**=`DINKES_ADMIN`, **A**=`ADMIN_PUSKESMAS`, **P**=`PIC`; **T**=`healthCenterId?`; **Y**=`year`; tanda `?` berarti opsional pada DTO, bukan otomatis opsional menurut otorisasi.
 
-#### 1. `GET /api/v1/master/indicators`
-* **Deskripsi**: Mengambil daftar lengkap 272 Indikator Baku ILP (sesuai hierarki provinsi).
-* **Query Params**:
-  * `klasterId` (Opsional, 1..5)
-  * `subKlasterCode` (Opsional, e.g. "1.1", "2.1")
-  * `search` (Opsional, kata kunci pencarian)
-* **Cache**: Cached di Redis selama 24 jam.
+- [tenantFor](backend/src/core/tenant.ts) fail-closed: D wajib UUID tenant eksplisit; A/P boleh menghilangkan T untuk tenant sendiri, tetapi tidak boleh memilih tenant lain atau beroperasi tanpa tenant valid.
+- D tanpa T hanya mendapat cakupan semua tenant pada **GET health-centers** dan **GET audit-logs**. Daftar pengguna, bulk writes, export polling, bridge, dan analytics biasa tetap wajib T eksplisit; tidak ada pengecualian daftar semua pengguna.
+- Pengecualian lintas tenant lain adalah dashboard `compare=true`, hanya D: tetap memilih tenant utama eksplisit, lalu service sengaja mengiterasi semua health center aktif.
+- Pemeriksaan role ada di guard dan banyak service. Query tenant-owned menggunakan scope eksplisit; worker ekspor memuat ulang identity dan otorisasi dari DB.
+- P dapat membaca katalog/target/record tenant, tetapi hanya menulis indikator yang di-assign di tahun tersebut. Assignment diperiksa di transaksi input.
+- Pengguna dikembalikan melalui safe select, tanpa password hash, tokenVersion, refreshHash atau session detail. A hanya mengubah PIC; D dapat mengubah admin/PIC, bukan D lewat endpoint ini.
 
-#### 2. `POST /api/v1/master/indicators`
-* **Deskripsi**: Menambah indikator evaluasi baru (Khusus Dinkes).
-* **Auth**: `DINKES_ADMIN`.
-* **Request Body**:
-```json
-{
-  "id": "K2-R99",
-  "klasterId": 2,
-  "subKlasterCode": "2.1",
-  "no": "2.1.8",
-  "kegiatan": "Pelayanan Skrining Hipotiroid Kongenital (SHK)",
-  "indikator": "Persentase bayi baru lahir yang dilakukan SHK",
-  "targetDisplay": "≥ 95%",
-  "targetNumeric": 0.95,
-  "satuan": "bayi",
-  "polarity": "HIGHER_IS_BETTER",
-  "isHead": false
-}
-```
+## 5. Endpoint Auth Dan Health
 
-#### 3. `GET /api/v1/master/years` & `POST /api/v1/master/years`
-* **Deskripsi**: Mengelola Periode Tahun Anggaran dan tanggal batas entri (*Cut-off Day*).
+Sumber: [auth DTO](backend/src/auth/auth.dto.ts), [controller](backend/src/auth/auth.controller.ts), [service](backend/src/auth/auth.service.ts).
 
----
+- `POST /auth/login` publik, 200: `{username,password,role?}`; role opsional harus cocok. Output `{accessToken,refreshToken,tokenType:"Bearer",expiresIn,user}`.
+- `POST /auth/refresh` publik, 200: `{refreshToken}` dengan bentuk UUID session + `.` + secret base64url 43 karakter; output token pair dan safe user yang sama.
+- `GET /auth/me`: safe user `{id,username,email,name,nip,role,status,healthCenterId,phone}`.
+- `POST /auth/logout` 200: tanpa DTO body; `{loggedOut:true}`, revoke session aktif tersebut.
+- `POST /auth/change-password` 200: `{currentPassword,newPassword}`; baru 12..128 karakter; `{passwordChanged:true,requiresLogin:true}`.
+- `GET /health` publik: `{status:"ok"}`, liveness saja, tidak memeriksa dependency.
+- `GET /health/ready` publik: ping DB, Redis, HEAD kedua bucket; `{status:"ready"}` atau 503. Detail `not_ready` tidak dipertahankan sebagai data oleh filter error.
 
-### 6.3 User, Admin PKM & Staff PIC Module
+Password Argon2id. Access JWT HS256 berisi sub/sid/tokenVersion, issuer `sipkp`, audience `sipkp-api`; default 900 detik, konfigurabel. Refresh opaque disimpan **hash SHA-256 dalam PostgreSQL Session**, default expiry tetap 7 hari sejak login.
 
-#### 1. `GET /api/v1/users/admin-puskesmas`
-* **Deskripsi**: Daftar seluruh Administrator Puskesmas di wilayah (Dinkes Only).
-* **Auth**: `DINKES_ADMIN`.
+Refresh diserialisasi row lock session dan mengganti hash; token lama ditolak, tidak mencabut keluarga session pemenang pada refresh paralel. Refresh tidak memperpanjang expiry session. Setiap autentikasi memeriksa session DB, status user/tenant, tokenVersion. Ganti password revoke semua session dan increment versi; PATCH status pengguna juga revoke semua session, termasuk jika field status dikirim ulang.
 
-#### 2. `POST /api/v1/users/admin-puskesmas`
-* **Deskripsi**: Dinkes membuat akun Administrator Puskesmas baru.
-* **Auth**: `DINKES_ADMIN`.
-* **Request Body**:
-```json
-{
-  "name": "dr. Nurul Aini",
-  "username": "admin.singosari",
-  "nip": "19800315 200604 2 011",
-  "healthCenterId": "pkm-2",
-  "phone": "08113456702",
-  "email": "admin.singosari@malangkab.go.id",
-  "password": "PasswordAwal123!"
-}
-```
+Login/refresh/me menggunakan `Cache-Control: no-store`. Tidak ada cookie auth otomatis, register publik atau MFA. Reset password terkelola tersedia pada endpoint pengguna di bawah; self-service recovery/forgot-password tidak tersedia dan tidak direncanakan, sesuai kebutuhan pengguna eksplisit.
 
-#### 3. `GET /api/v1/users/pics` & `POST /api/v1/users/pics`
-* **Deskripsi**: Puskesmas mengelola dan membuat akun Staf PIC masing-masing.
-* **Auth**: `ADMIN_PUSKESMAS` (terisolasi ke Puskesmas-nya) atau `DINKES_ADMIN`.
+Rate limit Redis memakai Lua INCR dan EXPIRE **60 detik sejak request pertama**, bukan sliding window: login 5 per IP, route lain 120 per actor ID atau IP jika publik. `/health` saja dibebaskan; readiness/refresh tetap dibatasi. Redis gagal ->503, tidak fail-open. Trust proxy tidak dikonfigurasi, sehingga IP di balik proxy perlu ditinjau sebelum produksi.
 
-#### 4. `PUT /api/v1/pic-assignments/bulk`
-* **Deskripsi**: Menetapkan penugasan PIC pada indikator atau seluruh sub-klaster sekaligus.
+## 6. Endpoint Operasional
 
----
+Sumber field/validasi: [operations.dto.ts](backend/src/operations/operations.dto.ts); route/role: [controller](backend/src/operations/operations.controller.ts).
 
-### 6.4 Target Sasaran Tahunan Module
+### Master Dan Pengguna
 
-#### 1. `GET /api/v1/targets/annual/:year`
-* **Deskripsi**: Mengambil target sasaran tahunan faskes (Total Sasaran & Target Sasaran per elemen).
-* **Auth**: All Authenticated.
+- `GET /master/indicators` D/A/P: query `{klasterId?,section?,subKlasterCode?,search?,page?,limit?,includeArchived?}`; klaster0 berarti semua, section exact atau descendant bertanda titik; pencarian id/kegiatan/indikator case-insensitive. Output `{items,total,page,limit}`, item Indicator + `section`; tanpa page/limit seluruh hasil, dengan pagination maksimum500. Default hanya indikator aktif dalam section aktif; `includeArchived=true` opsional hanya D/A.
+- `GET /master/sections`: array Section `{code,name,klasterId,parentCode,order,isActive}`; default aktif, query `includeArchived=true` hanya D/A. `GET /master/years`: array YearPeriod, urut tahun menurun.
+- `POST /master/indicators` D/A: `{id,klasterId,sectionCode,no,kegiatan,indikator,satuan,targetDisplay,targetNumeric,totalSasaranDefault,targetSasaranDefault,polarity,formulaRaw?,notes?,isActive?}`. Section harus aktif/klaster sama; scoringVersion ditetapkan server. `PATCH /master/indicators/:id` D/A menerima field editable tersebut selain id, plus `expectedUpdatedAt?` (stale409). `DELETE /master/indicators/:id` D/A soft archive; PATCH `{isActive:true}` restore, bukan hard delete.
+- `POST /master/sections` D/A: `{code,name,klasterId,parentCode?,order?,isActive?}`; kode harus cocok klaster dan immediate parent aktif. `PATCH /master/sections/:code` D/A hanya `{name?,order?,isActive?}`; identity/hierarki immutable. DELETE soft archive ditolak409 jika masih ada descendant section/indikator aktif; restore memerlukan parent aktif.
+- Mutasi indikator/section di atas adalah **global lintas seluruh tenant**, bukan salinan milik admin Puskesmas. Natural ID seperti `K1-R1` dan kode `1.1` harus di-encode sebagai segmen URL (`encodeURIComponent`), bukan UUID. Key arsip tetap reserved, duplicate409; restore dengan PATCH.
+- Setelah indikator memiliki monthly record di tenant/tahun mana pun, perubahan `klasterId`, `sectionCode`, `targetNumeric`, `totalSasaranDefault`, `targetSasaranDefault` atau `polarity` ditolak409; buat ID/versi indikator baru. `scoringVersion` tidak dapat diedit; `formulaRaw` metadata inert. Mutasi diaudit; draft/live dapat berubah, tetapi snapshot terlindungi tidak ditulis ulang.
+- `POST /master/years` D/A: `{year,cutoffDay?}` (default10), output YearPeriod. DTO cutoff sampai31, SQL sampai28; gunakan1..28. `cutoffDay` belum menjadi deadline otomatis.
+- `PATCH /master/years/:year` D/A: `{cutoffDay?,isLocked?}`, minimal satu field; `isLocked` hanya D. Output YearPeriod, row lock tahun global lintas tenant. `DELETE /master/years/:year` hanya D, output `{year}`;409 bila direferensikan target, assignment, record, periode, rekomendasi, upload atau export job.
+- `GET /health-centers` D/A/P: query T; array HealthCenter. D boleh omit T untuk semua. `POST /health-centers` D: `{code,name,district,address?,headName?,headNip?,phone?,email?}`, output resource.
+- Code health center `[A-Za-z0-9_-]` 1..50; name/district 1..200; address<=1000; headName<=200; headNip/phone<=50; email valid<=254.
+- `PATCH /health-centers/:id` D/A: profil `{name?,district?,address?,headName?,headNip?,phone?,email?,isActive?}`; A hanya tenant sendiri, `isActive:false` hanya D. `DELETE /health-centers/:id` D soft-deactivate dan mencabut seluruh session tenant, bukan menghapus histori.
+- `GET /users/admin-puskesmas` D; `GET /users/pics` D/A: query `{T,page?,limit?}`; output `{items,total,page,limit}` safe users. Default page1/limit50, maksimum500; **D wajib T**.
+- `POST /users/admin-puskesmas` D; `POST /users/pics` D/A: `{T,username,password,name,nip?,phone?,email?}`; output safe user + createdAt/updatedAt. Tenant harus aktif; username regex `[A-Za-z0-9._-]` 3..100, password12..256, name1..200, nip/phone<=50, email<=254.
+- `PATCH /users/:id` D/A: `{T,name?,nip?,phone?,email?,status?}`; minimal satu editable field. Status `ACTIVE|INACTIVE|SUSPENDED`; SUSPENDED hanya D. Tidak menerima role/username/password atau perpindahan tenant. Output safe user + timestamps. `DELETE /users/:id` D/A query T melakukan soft-deactivate `INACTIVE` dengan batas role/tenant yang sama dan pencabutan session.
+- `POST /users/:id/reset-password` D/A: `{T,newPassword,reason}`; password12..256 karakter dan alasan trimmed nonblank1..1000 wajib. A hanya PIC tenant sendiri; D admin/PIC tenant eksplisit, bukan Dinkes lain. Reset peer admin atau diri sendiri dilarang; gunakan `/auth/change-password` untuk password sendiri. Argon2id, kenaikan tokenVersion, revoke semua session target dan audit `PASSWORD_RESET` atomic; audit hanya target/role/alasan, tanpa password/hash/token. Output `{id,username,sessionsRevoked}`, bukan secret. Ini reset terkelola, bukan pemulihan mandiri.
 
-#### 2. `PUT /api/v1/targets/annual/:year/bulk`
-* **Deskripsi**: Mengisi atau memperbarui target sasaran tahunan (sebelum dikunci).
-* **Auth**: `ADMIN_PUSKESMAS`.
-* **Request Body**:
-```json
-{
-  "targets": [
-    {
-      "indicatorId": "K1-R8",
-      "targetPct": 100.0,
-      "totalSasaran": 1.0,
-      "targetSasaran": 1.0
-    },
-    {
-      "indicatorId": "K2-R10",
-      "targetPct": 100.0,
-      "totalSasaran": 328.0,
-      "targetSasaran": 328.0
-    }
-  ]
-}
-```
+### Target, Assignment, Dan Record
 
----
+- `GET /targets/annual/:year` D/A/P query T -> `{healthCenterId,year,items}`. Item memuat `indicator`, `rawTargetNumeric`, field AnnualTarget, `source:PERSISTED|DEFAULT`, `hasExplicitTarget`; DEFAULT bukan target eksplisit yang dapat dipakai submit. Default targetPct=`round4(targetSasaranDefault/totalSasaranDefault*100)` bila total>0, selain itu0; bukan threshold polarity. Nilai katalog asli tetap tersedia sebagai rawTargetNumeric.
+- `PUT /targets/annual/:year/bulk` A: `{T,targets:[{indicatorId,targetPct,totalSasaran,targetSasaran?}]}` -> `{healthCenterId,year,updated}`. targetPct/totalSasaran 0..999999999; targetSasaran opsional0..9999999999.
+- `POST /targets/annual/:year/lock` A body T -> `{healthCenterId,year,locked}`; menghitung target yang baru dikunci, pemanggilan ulang menghasilkan0 bila semuanya sudah locked; bukan membuat target yang hilang. Tidak ada route unlock target.
+- `GET /pic-assignments` D/A/P query `{T,year}` -> array assignment + `picUser` safe select.
+- `PUT /pic-assignments/bulk` D/A: `{T,year,picUserId,indicatorIds? ,sectionCode?}`; tepat satu selector, PIC aktif tenant sama -> `{healthCenterId,year,assigned}`. Upsert assignment. `DELETE /pic-assignments/:indicatorId` D/A query `{T,year}` melepas assignment sesuai proteksi tahun/periode.
+- `GET /records/monthly` D/A/P query `{T,year,month,klasterId?}` -> `{healthCenterId,year,month,denominatorMode:"ANNUAL_DIVIDED_BY_12",items}`.
+- Item record memuat `indicator`, field MonthlyRecord, `source:PERSISTED|MISSING`, `isMissing`, `hasExplicitTarget`, `isAssignedToMe`; input/metrik missing bernilai null, bukan zero.
+- `PUT /records/monthly` A/P: `{T,year,month,records:[{indicatorId,pencapaianRiil,notes?,evidenceId?}]}` -> `{healthCenterId,year,month,updated,syncStatus:"NOT_SYNCED"}`. Pencapaian0..999999999, notes<=4000, evidence UUID atau null.
 
-### 6.5 Input Capaian & Rekam Kinerja Bulanan Module
+Target turunan selalu `round4(totalSasaran * targetPct / 100)`; jika client mengirim targetSasaran harus persis cocok. Target dengan record bulanan existing untuk indikator/tahun itu **read-only**, bahkan PUT nilai sama ditolak409; rescoring otomatis tidak tersedia. Target juga ditolak jika ada target tenant-tahun terkunci atau periode submitted/verified mana pun dalam tahun itu.
 
-#### 1. `GET /api/v1/records/monthly`
-* **Query Params**: `year=2026`, `month=3`, `klasterId=0`
-* **Response (200 OK)**:
-Mengembalikan 272 elemen beserta numerators, persentase capaian riil, skor nilai kinerja, status bukti dukung, dan status sinkronisasi.
+Setiap record wajib memiliki target tahunan **persisted**. `saveMonthly` membagi populasi dan target fisik tahunan dengan12, round4 untuk penyimpanan, tetapi argumen `target` scorer adalah **annual.targetPct (persentase), bukan targetSasaran fisik**. Populasi, target fisik, atau targetPct nol -> kedua metrik null. Target nol boleh disimpan, tetapi membuat periode tidak lolos submit; belum ada aturan pengecualian not-applicable.
 
-#### 2. `PUT /api/v1/records/monthly`
-* **Deskripsi**: Input atau update numerator capaian bulanan oleh PIC / Admin PKM.
-* **Guards**: `PeriodNotLockedGuard`.
-* **Request Body**:
-```json
-{
-  "year": 2026,
-  "month": 3,
-  "records": [
-    {
-      "indicatorId": "K2-R10",
-      "pencapaianRiil": 28.0,
-      "notes": "Target TW1 terpenuhi 100% tanpa kendala",
-      "evidenceObjectKey": "2026/P35070101/M3/17712399_Laporan_KIA_Maret.pdf"
-    }
-  ]
-}
-```
-* **Logika Backend**: Menghitung secara otomatis `capaianRiilPct` dan `nilaiKinerja` menggunakan modul kalkulator resmi, melakukan re-kalkulasi Head Penilaian, menginvalidasi cache Sheet 7 di Redis, dan mencatat ke `audit_logs`.
+Evidence harus READY/ATTACHED, memiliki etag, dan cocok tenant-tahun-bulan. Menghilangkan evidenceId mempertahankan relasi, null melepas relasi; attach menjadi ATTACHED. Pelepasan tidak otomatis menurunkan status upload. Setiap edit reset NOT_SYNCED; bukan tanda sync remote berhasil. Bulk data dan audit atomic.
 
----
+### Workflow, Rekomendasi, Audit
 
-### 6.6 Workflow Verifikasi & Penguncian Periode Module
+- `GET /workflow/periods` query `{T,year}` -> array PeriodLock, termasuk snapshot/revision bila ada; periode belum dibuat tidak otomatis muncul sebagai row DRAFT.
+- `POST /workflow/submit` A; `/workflow/verify`, `/workflow/revise`, `/workflow/reopen` D: body `{T,year,periodNumber,isQuarter,expectedRevision?,revisionNote?,reason?,cascadeDependencies?}`; output PeriodLock persisted + `invalidatedPeriods:[{id,status,revision}]` (kosong bila tidak ada invalidasi).
+- `periodNumber` month1..12 atau quarter1..4, `isQuarter` boolean wajib. Verify/revise/reopen **wajib expectedRevision**; hanya submit opsional; revision integer>=0, note/reason1..4000. `cascadeDependencies` boolean defaultfalse, bukan string, dipakai revise/reopen.
+- `GET /recommendations` query `{T,year,quarter?}` -> array Recommendation + section.
+- `POST /recommendations/feedback` D: `{T,year,quarter,sectionCode,recommendationText}` (1..10000); upsert berdasarkan tenant/tahun/quarter/section, output resource.
+- `PATCH /recommendations/:id/action-plan` A: `{T,analisisPenyebab?,actionPlanText?,targetPenyelesaian?,picName?,statusFollowUp?}`; minimal satu field, teks analisis/plan<=10000, target/pic<=200; status `PENDING|IN_PROGRESS|RESOLVED`; output resource.
+- `GET /audit-logs` D/A: query `{T,page?,limit?,from?,to?}`; ISO timestamps, from<=to; output `{items,total,page,limit}` urut terbaru. D boleh semua tenant; P tidak mendapat akses audit.
 
-```mermaid
-stateDiagram-v2
-    [*] --> DRAFT : Periode Baru
-    DRAFT --> SUBMITTED : Admin PKM Klik "Ajukan ke Dinkes"
-    SUBMITTED --> DRAFT : (Terkunci untuk Faskes)
-    SUBMITTED --> VERIFIED : Dinkes Setujui & Sahkan
-    SUBMITTED --> REVISION_REQUIRED : Dinkes Tolak / Minta Perbaikan
-    REVISION_REQUIRED --> SUBMITTED : Faskes Selesaikan Catatan & Ajukan Ulang
-    VERIFIED --> [*] : Berita Acara Ditandatangani
-```
+## 7. Penguncian, State Machine, Snapshot
 
-#### 1. `POST /api/v1/workflow/submit`
-* **Deskripsi**: Puskesmas mengajukan laporan capaian bulanan/triwulanan ke Dinas Kesehatan. Data otomatis terkunci.
-* **Auth**: `ADMIN_PUSKESMAS`.
-* **Request Body**: `{ "year": 2026, "periodNumber": 3, "isQuarter": false }`
+[lockYear/assertWritable](backend/src/core/period.ts) mengambil `SELECT ... FOR UPDATE` pada `year_periods` sebelum pemeriksaan/mutasi. Ini serialisasi **per tahun global**, bukan SQL isolation SERIALIZABLE dan bukan hanya per tenant. Tahun terkunci menolak target, assignment, record, workflow (termasuk verify), rekomendasi, dan upload baru/finalize pending.
 
-#### 2. `POST /api/v1/workflow/verify`
-* **Deskripsi**: Dinas Kesehatan memverifikasi dan mengesahkan laporan faskes.
-* **Auth**: `DINKES_ADMIN`.
-
-#### 3. `POST /api/v1/workflow/revise`
-* **Deskripsi**: Dinas Kesehatan mengembalikan laporan dengan catatan revisi perbaikan.
-* **Auth**: `DINKES_ADMIN`.
-* **Request Body**:
-```json
-{
-  "healthCenterId": "pkm-1",
-  "year": 2026,
-  "periodNumber": 3,
-  "isQuarter": false,
-  "revisionNote": "Mohon periksa kembali numerator indikator 2.1.3 karena melebihi total sasaran balita."
-}
-```
-
----
-
-### 6.7 Analitik Skor, Nilai Resmi Sheet 7 & Dasbor Tahunan 12 Bulan
-
-#### 1. `GET /api/v1/analytics/sheet7`
-* **Deskripsi**: Mengambil formulir resmi Sheet 7 (Nilai Kinerja 2026) lengkap 5 Klaster, 29 Sub-klaster, rata-rata akumulatif, dan Berita Acara.
-* **Query Params**: `year=2026`, `quarter=1` (atau `quarter=ANNUAL`)
-
-#### 2. `GET /api/v1/analytics/annual-trend`
-* **Deskripsi**: Mengambil data matriks komparasi 12 bulan (Januari s/d Desember) untuk seluruh klaster, sub-klaster, dan indikator (kompatibel dengan `AnnualTrendDashboard.tsx`).
-* **Query Params**: `year=2026`, `klasterId=0`
-* **Response Structure**:
-```json
-{
-  "success": true,
-  "data": {
-    "year": 2026,
-    "annualAveragePKP": 78.45,
-    "annualCategoryPKP": "Kinerja Kurang",
-    "monthlyOverallScores": [75.2, 75.8, 77.45, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    "highestMonth": { "month": 3, "name": "Maret", "score": 77.45 },
-    "lowestMonth": { "month": 1, "name": "Januari", "score": 75.2 },
-    "klasters": [
-      {
-        "klasterId": 1,
-        "name": "Klaster 1: Manajemen Puskesmas",
-        "monthlyScores": [76.0, 76.2, 76.6, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-        "annualAverage": 76.27,
-        "category": "Kinerja Kurang"
-      }
-    ],
-    "subKlasters": [ ... ]
-  }
-}
-```
-
----
-
-### 6.8 Supervisi Dinkes, Rekomendasi & RTL Module
-
-#### 1. `GET /api/v1/recommendations`
-* **Query Params**: `year=2026`, `quarter=1`
-* Mengambil daftar umpan balik pembinaan, akar masalah, dan Rencana Tindak Lanjut (RTL).
-
-#### 2. `POST /api/v1/recommendations/feedback`
-* **Auth**: `DINKES_ADMIN` (Dinkes menginput rekomendasi pembinaan pada sub-klaster yang belum optimal).
-
-#### 3. `PATCH /api/v1/recommendations/:id/action-plan`
-* **Auth**: `ADMIN_PUSKESMAS` (Puskesmas menginput analisa akar masalah dan RTL perbaikan).
-
----
-
-### 6.9 Object Storage & Bukti Dukung (MinIO) Module
-
-#### 1. `POST /api/v1/storage/presigned-upload`
-* **Auth**: All Authenticated.
-* **Request Body**:
-```json
-{
-  "filename": "Notulen_Lokmin_Maret_2026.pdf",
-  "mimeType": "application/pdf",
-  "fileSizeBytes": 1420500,
-  "year": 2026,
-  "month": 3
-}
-```
-* **Response (200 OK)**:
-```json
-{
-  "success": true,
-  "data": {
-    "uploadUrl": "https://storage.sipkp.faskes.id/pkp-evidence/2026/P35070101/M3/17712399_Notulen.pdf?X-Amz-Signature=...",
-    "objectKey": "2026/P35070101/M3/17712399_Notulen.pdf",
-    "expiresInSeconds": 300
-  }
-}
-```
-
-#### 2. `GET /api/v1/storage/presigned-download`
-* **Query Params**: `objectKey=2026/P35070101/M3/17712399_Notulen.pdf`
-* Mengembalikan URL bertanda tangan aman untuk mengunduh bukti dukung.
-
----
-
-### 6.10 Ekspor Laporan & Background Jobs Module
-
-#### 1. `POST /api/v1/export/excel/sheet7`
-* **Deskripsi**: Mengirim pekerjaan render Excel Sheet 7 ke BullMQ Queue.
-* **Response (202 Accepted)**:
-```json
-{
-  "success": true,
-  "message": "Pekerjaan ekspor Excel sedang diproses di antrean latar belakang",
-  "data": { "jobId": "job-excel-98213" }
-}
-```
-
-#### 2. `GET /api/v1/export/jobs/:jobId`
-* **Deskripsi**: Memeriksa status pekerjaan render file (Polling status atau via SSE/WebSocket).
-* **Response (Status Completed)**:
-```json
-{
-  "success": true,
-  "data": {
-    "status": "COMPLETED",
-    "downloadUrl": "https://storage.sipkp.faskes.id/pkp-reports/..."
-  }
-}
-```
-
----
-
-### 6.11 Provincial Bridge Sync Module
-
-#### 1. `POST /api/v1/bridge/sync-batch`
-* **Deskripsi**: Mengirim paket data capaian 272 indikator ke server SIPKP Provinsi Jawa Timur sesuai kode baku Kemenkes.
-* **Auth**: `ADMIN_PUSKESMAS` atau `DINKES_ADMIN`.
-
-#### 2. `GET /api/v1/bridge/status`
-* **Deskripsi**: Memeriksa status konektivitas TLS, batch ID pengiriman terakhir, dan verifikasi hash integritas data provinsi.
-
----
-
-### 6.12 Audit Log & Aktivitas Module
-
-#### 1. `GET /api/v1/audit-logs`
-* **Query Params**: `page=1`, `limit=20`, `startDate=2026-01-01`
-* **Auth**: `ADMIN_PUSKESMAS` (hanya log faskes sendiri) atau `DINKES_ADMIN` (seluruh log wilayah).
-
----
-
-## 7. Struktur Direktori NestJS & Konfigurasi Docker Compose
-
-### 7.1 Struktur Direktori Proyek NestJS Rekomendasi
+State machine yang tersedia:
 
 ```text
-sipkp-backend/
-├── src/
-│   ├── app.module.ts
-│   ├── main.ts
-│   ├── common/
-│   │   ├── decorators/         # @CurrentUser, @Roles, @TenantId
-│   │   ├── filters/            # GlobalExceptionFilter (RFC 7807)
-│   │   ├── guards/             # JwtAuthGuard, RolesGuard, PeriodLockGuard
-│   │   ├── interceptors/       # TransformInterceptor, AuditLogInterceptor
-│   │   ├── pipes/              # ValidationPipe (strip unknown, strict types)
-│   │   └── prisma/             # PrismaService & Tenant Scope Extensions
-│   ├── modules/
-│   │   ├── auth/               # Login, Refresh, Change Password, Argon2
-│   │   ├── master/             # Indikator (272 items), Klaster, Sub-klaster, Tahun
-│   │   ├── users/              # Dinkes, Admin PKM, PIC Management
-│   │   ├── targets/            # Target Sasaran Tahunan
-│   │   ├── records/            # Input Capaian Bulanan, Normalisasi Polaritas
-│   │   ├── workflow/           # State Machine Pengajuan, Verifikasi, Penguncian
-│   │   ├── analytics/          # Rollup Engine, Sheet 7 Excel, Dasbor 12 Bulan
-│   │   ├── recommendations/    # RTL & Pembinaan Dinkes
-│   │   ├── storage/            # MinIO Client, Presigned Upload/Download
-│   │   ├── export/             # BullMQ Producer & Workers (Excel/PDF)
-│   │   ├── bridge/             # Konektor API Provinsi Jawa Timur
-│   │   └── audit-log/          # Audit Trails
-│   └── jobs/                   # BullMQ Worker Processors
-├── prisma/
-│   ├── schema.prisma           # Prisma Schema
-│   └── seed.ts                 # Seeder 272 Indikator Baku & Akun Demo
-├── docker-compose.yml          # Postgres, Redis, MinIO, App
-├── .env.example
-└── package.json
+DRAFT -> SUBMITTED                 submit A
+REVISION_REQUIRED -> SUBMITTED     submit A
+SUBMITTED -> VERIFIED              verify D
+SUBMITTED -> REVISION_REQUIRED     revise D + revisionNote
+VERIFIED -> REVISION_REQUIRED      reopen D + reason
 ```
 
----
+Tidak ada `SUBMITTED -> DRAFT` atau withdraw. Semua transisi menambah revision; expectedRevision stale ->409. Unlock tahun tidak membuka period lock atau annual target secara otomatis; cascade melepaskan proteksi periode melalui REVISION_REQUIRED, bukan membuka annual target.
 
-### 7.2 Docker Compose untuk Pengembangan & Produksi
+- Month melindungi satu bulan. Quarter **YTD Januari..3*q**, bukan tiga bulan quarter saja: Q2 melindungi1..6, Q4 melindungi1..12.
+- Karena itu submitted/verified quarter yang lebih akhir juga mengunci bulan terdahulu, termasuk sebelum quarter bulan input tersebut. Pending/revision_required sendiri tidak mengunci bulan, tetapi dependency lain tetap mengunci.
+- Submit wajib semua indikator aktif punya target eksplisit dan record untuk **setiap bulan cakupan**, kedua metrik non-null. Evidence/assignment tidak menjadi syarat kelengkapan submit.
+- Submit mengunci seluruh annual target tenant-tahun dan membuat JSON snapshot schemaVersion1 berisi identity/cakupan, health center metadata, **semua section hierarchy dan seluruh metadata katalog** (termasuk polarity/versi), target, record, actor, timestamp server.
+- Verified child month/quarter tidak menghalangi submit YTD induk. Verify mempertahankan snapshot submitted; revise/reopen juga menyimpan snapshot lama di row. Resubmit mengganti snapshot, sementara audit menyimpan previousSnapshot penuh.
+- Analytics memprioritaskan snapshot periode SUBMITTED/VERIFIED persis; pembacaan bulanan juga dapat memakai snapshot quarter pelindung sebagaimana bagian8. Snapshot invalid ->409. Perubahan metadata katalog live tidak mengubah input sejarah yang dibekukan tersebut.
+- Revise/reopen menghitung **transitive closure** overlap semua periode lain SUBMITTED/VERIFIED tenant-tahun, termasuk quarter masa depan YTD. Quarter dapat menghubungkan dua monthly period yang awalnya tidak overlap langsung. Default tanpa cascade tetap409 bila ada dependency.
+- D dapat mengirim `cascadeDependencies:true` secara eksplisit: semua dependency transitif menjadi REVISION_REQUIRED, revision masing-masing naik, verified actor/time dibersihkan, snapshot lama dipertahankan. Seluruh invalidasi dan transisi asal atomic di bawah lock tahun, bukan serangkaian request terpisah.
+- Setiap dependency mendapat audit `PERIOD_CASCADE_INVALIDATED` berisi previousSnapshot penuh, previous status/revision, reason, dan cascadeOrigin; audit transisi asal mencatat invalidatedPeriods. ExpectedRevision memeriksa periode asal, bukan revision client untuk setiap dependency. Tahun locked tetap menolak cascade; resubmit dan verifikasi ulang dilakukan eksplisit, tidak otomatis.
+- Snapshot bukan tanda tangan digital, WORM DB, atau bukti approval eksternal; akses DB administratif tetap perlu dikendalikan.
 
-Berikut adalah berkas `docker-compose.yml` lengkap yang menyatukan PostgreSQL, Redis, MinIO, dan NestJS:
+## 8. Scoring Dan Analytics
 
-```yaml
-version: '3.8'
+Sumber formula tunggal: [scoring.ts](backend/src/analytics/scoring.ts). `formulaRaw` katalog bukan evaluator kode Excel. Scorer hanya menerima `ILP_2026_V1`; input finite nonnegative, polarity/ID tiered tidak dikenal ->400.
 
-services:
-  # ==================== DATABASE ====================
-  postgres:
-    image: postgres:16-alpine
-    container_name: sipkp_postgres
-    restart: always
-    environment:
-      POSTGRES_USER: sipkp_user
-      POSTGRES_PASSWORD: SecretPostgres2026!
-      POSTGRES_DB: sipkp_db
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U sipkp_user -d sipkp_db"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+Misalkan `a=pencapaianRiil`, `d=population denominator`, `t=annual targetPct`, `r=a/d`, `p=100*r`. Semua polarity memerlukan d>0 dan t>0. Analytics juga mensyaratkan target fisik prorata positif.
 
-  # ==================== REDIS (CACHE & QUEUE) ====================
-  redis:
-    image: redis:7-alpine
-    container_name: sipkp_redis
-    restart: always
-    command: redis-server --requirepass SecretRedis2026! --appendonly yes
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "-a", "SecretRedis2026!", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+- HIGHER_IS_BETTER: `min(100, p/t*100)`.
+- LOWER_IS_BETTER:100 bila p<=threshold, selain itu0. K2-R50 threshold15.04; K2-R52 threshold8; lainnya `indicator.targetNumeric*100`. Bukan kurva penalti gradual.
+- BINARY:100 bila **a>=t**, selain itu0; membandingkan achievement dengan argumen persentase target seperti kode saat ini, bukan dengan target fisik. Ini khususnya memerlukan signoff domain.
+- TIERED_BRACKETS memakai batas `[15,17.5,20,22.5]` untuk K3-R40, `[3.5,4.5,7.5,10]` K3-R41, `[20,40,60,80]` K5-R23, `[8,20,40,60]` K5-R24, `[1,10,20,30]` K5-R25, `[2.6,4,7,9]` K5-R26.
+- Tiered mengevaluasi p kecuali K5-R26 memakai r. Batas pertama K3-R40/R41 strict `<`; seluruh batas lain `<=`. Skor berturut100,75,50,25 lalu0; **K3-R40 slot keempat22.5**, bukan25.
+- Perbandingan Decimal sebelum pembulatan; capaian dan skor internal4 desimal, output analytics2 desimal. Skor dibatasi0..100; capaian persentase bisa>100. Tidak ada null->100.
+- Kategori score>=91 `Kinerja Baik`, >=81 `Kinerja Cukup`, selain itu `Kinerja Kurang`; null tetap null.
 
-  # ==================== OBJECT STORAGE (MINIO) ====================
-  minio:
-    image: minio/minio:RELEASE.2024-03-05T04-48-44Z
-    container_name: sipkp_minio
-    restart: always
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: minio_admin
-      MINIO_ROOT_PASSWORD: MinioSecretKey2026!
-    ports:
-      - "9000:9000"   # API S3
-      - "9001:9001"   # Web Console UI
-    volumes:
-      - minio_data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+Agregasi hirarkis: section merata-ratakan satu grup mean indikator langsung (jika ada) dan setiap child section dengan bobot setara; klaster mean top-level sections; overall mean lima slot klaster. Bukan mean datar semua indikator aktif; jumlahnya dinamis. Mean mengabaikan null, tetapi grup hilang membuat `isComplete=false`; nilai/kategori parsial hanya deskriptif.
 
-  # Auto Create Bucket Script for MinIO
-  minio-init:
-    image: minio/mc:latest
-    container_name: sipkp_minio_init
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-      /usr/bin/mc alias set local http://minio:9000 minio_admin MinioSecretKey2026!;
-      /usr/bin/mc mb --ignore-existing local/pkp-evidence;
-      /usr/bin/mc mb --ignore-existing local/pkp-reports;
-      exit 0;
-      "
+Sheet7 q menghitung jumlah numerator Januari..3*q, denominator/target fisik tahunan dikali q/4, target persentase tetap tahunan. ANNUAL memakai **lock quarter4 persis**, bukan month4/month12. Indikator tanpa semua bulan ->score null, tanpa target/target nol ->NO_TARGET. `completionRate` menghitung record hadir, bukan jaminan semua record punya score valid.
 
-  # ==================== NESTJS APPLICATION ====================
-  backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: sipkp_backend
-    restart: always
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-    environment:
-      NODE_ENV: production
-      PORT: 4000
-      DATABASE_URL: "postgresql://sipkp_user:SecretPostgres2026!@postgres:5432/sipkp_db?schema=public&connection_limit=25"
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      REDIS_PASSWORD: SecretRedis2026!
-      MINIO_ENDPOINT: "http://minio:9000"
-      MINIO_PUBLIC_ENDPOINT: "http://localhost:9000"
-      MINIO_ACCESS_KEY: minio_admin
-      MINIO_SECRET_KEY: MinioSecretKey2026!
-      MINIO_BUCKET_NAME: pkp-evidence
-      JWT_SECRET: "kemenkes_sipkp_pulse_ultra_secret_jwt_key_2026"
-      JWT_EXPIRATION: "900s"
-      REFRESH_TOKEN_SECRET: "kemenkes_sipkp_pulse_ultra_refresh_secret_2026"
-      REFRESH_TOKEN_EXPIRATION: "7d"
-    ports:
-      - "4000:4000"
+`isOfficial=true` hanya jika exact-period snapshot VERIFIED dan aggregate lengkap. SUBMITTED snapshot tetap provisional; nilai live/DRAFT/REVISION_REQUIRED/partial tidak resmi. Kata official ini hanya label workflow internal, **tidak mengesahkan formula secara klinis/regulasi**.
 
-volumes:
-  postgres_data:
-  redis_data:
-  minio_data:
+- `GET /analytics/sheet7` D/A/P: query `{T,year,quarter?}`; quarter1..4 atau ANNUAL(default). Output identity/nama/kepala tenant, `rows` head+sections, `klasterScores`, `nilaiKinerjaPuskesmas`, `kategoriPKP`, `totalIndikator`, `completionRate`, `isComplete`, `isOfficial`, `status`, `periodStatus`, `source`, `scoringVersion`, `basis`, `aggregation`, `aggregateStatus`, `targetFraction`, `denominatorMode`, `indicators` dengan input/metrik/status/populatedMonths/expectedMonths.
+- `GET /analytics/annual-trend`: query `{T,year,klasterId?}` (0..5, default0); output12 `monthlyOverallScores`, `monthlyComplete`, `monthlySubmittedCount`, categories/statuses, `annualAveragePKP`, category, `completedMonths`, highest/lowestMonth, `klasters`, `subKlasters`, serta metadata basis/source/completeness; `isOfficial=false`.
+- `GET /analytics/indicator-trends`: query sama; output identity/metadata dan `items` berisi indicator, monthlyValues/Pct/Scores, annualAverageScore/Pct, category, isComplete, monthlyStatus, monthlyIndicators frozen per bulan. Top-level completeness masih seluruh dataset, bukan hanya klaster filter.
+- `GET /dashboard/summary` dan alias `/analytics/dashboard/summary`: query Sheet7 + `compare?` string true/false(defaultfalse); output Sheet7, ditambah `comparison` semua tenant aktif jika D meminta compare.
+
+Trend membaca12 dataset bulanan independen dengan transaksi RepeatableRead per dataset, bukan satu snapshot tahunan atomic. Exact monthly SUBMITTED/VERIFIED snapshot diprioritaskan; bila tidak ada, dipilih **quarter terlindungi terkecil yang mencakup bulan**, lalu record snapshot difilter ke bulan tersebut. Source fallback `SUBMITTED_QUARTER_SNAPSHOT`/`VERIFIED_QUARTER_SNAPSHOT`; metadata/target tetap frozen. Snapshot invalid tetap409, bukan fallback live. Status fallback mengikuti quarter tetapi tidak mengesahkan periode bulanan sebagai official; seluruh endpoint trend tetap `isOfficial=false`.
+
+Annual trend = mean **bulan lengkap saja**, null bila tidak ada; indicator trend = mean bulan yang scored. Ini bukan Sheet7 tahunan kumulatif. Monthly submitted count menghitung indikator complete pada dataset berstatus SUBMITTED/VERIFIED, termasuk fallback quarter. Helper `prorated(value,months)` membulatkan `value*months/12` ke4 desimal **sebelum scoring**, selaras dengan denominator/target fisik bulanan pada saveMonthly. Analytics menghitung ulang dari input dan metadata frozen memakai versi scoring yang didukung; output tetap2 desimal.
+
+> **Keputusan produk wajib:** mode compatibility `ANNUAL_DIVIDED_BY_12` membagi sasaran rata, belum memodelkan seasonality, indikator kumulatif/kejadian/biner, atau kebijakan not-applicable. Angka yang dapat dihitung bukan bukti ketepatan klinis atau persetujuan resmi.
+
+## 9. Storage Dan Ekspor
+
+- `POST /storage/presigned-upload` A/P: `{T,filename,mimeType,fileSizeBytes,year,month}` -> `{uploadId,objectKey,uploadUrl,expiresInSeconds:300,requiredHeaders:{"Content-Type":mimeType}}` (201).
+- File1..10MiB, PDF/PNG/JPEG/XLSX sesuai extension+MIME; nama disanitasi. Signed PUT memakai **ContentLength**, ContentType, metadata upload-id; content-length/content-type ditandatangani. Client harus mengirim byte length tepat walau requiredHeaders hanya mencantumkan Content-Type.
+- URL client ditandatangani terhadap `MINIO_PUBLIC_ENDPOINT`; HEAD/COPY/GET internal memakai `MINIO_ENDPOINT`. Hostname/port URL bertanda tangan tidak boleh diganti client.
+- `POST /storage/uploads/:id/finalize` A/P,200 tanpa DTO body ->Upload resource; P hanya upload miliknya. PENDING memeriksa tahun/periode/expiry, HEAD staging, COPY kondisional ETag ke **key final acak baru**, validasi final copy, lalu commit READY dan best-effort hapus staging.
+- Validasi final mencocokkan byte length, MIME, metadata, ETag dan magic awal PDF/PNG/JPEG/ZIP(XLSX). Ini **bukan malware scanner**, bukan parser XLSX penuh atau validasi seluruh dokumen. XLSX magic hanya membuktikan prefix ZIP.
+- Final key tidak mendapat signed PUT, sehingga PUT staging yang masih berlaku tidak menimpa evidence final. READY/ATTACHED retry finalize mengembalikan row tanpa menyentuh object, termasuk setelah periode terkunci. Ini immutability aplikasi, bukan S3 Object Lock/WORM.
+- Konflik trigger/key finalize telah diselesaikan: `uploads_identity` melindungi identitas file, sedangkan `uploads_finalization` khusus mengizinkan key/etag berubah PENDING->READY dan menolak perubahan berikutnya. Finalize dan proteksi SQL telah dicakup pengujian integrasi nyata, bukan hanya mock storage.
+- `GET /storage/presigned-download` D/A/P query `{T,uploadId?,objectKey?}` tepat satu selector -> `{uploadId,objectKey,downloadUrl,expiresInSeconds:300}`; hanya READY/ATTACHED key final evidence tenant. P dibatasi upload miliknya; D wajib T.
+
+- `POST /export/excel/sheet7` atau `/export/pdf/sheet7` D/A,202: `{T,year,quarter}` (quarter wajib1..4 atau ANNUAL) -> `{jobId,status:"QUEUED",healthCenterId,year,quarter,format:"xlsx"|"pdf"}`.
+- `GET /export/jobs/:id` D/A query T ->ExportJob dengan quarter0 dikonversi ANNUAL, tambahan signed download300 detik hanya jika COMPLETED dan key sesuai prefix tenant/job. Job dibaca dalam tenant, bukan khusus pemilik saja.
+- Worker hanya mempercayai ID job dari Redis; input/scope/owner role dan status dimuat ulang DB. Status QUEUED ->RUNNING ->COMPLETED/FAILED;3 attempts total, exponential backoff mulai1000ms. Retensi record antrean selesai1hari/gagal7hari, bukan kebijakan retensi laporan DB/object.
+- Startup merekonsiliasi DB QUEUED/RUNNING dengan antrean. Enqueue gagal ->503 dan status FAILED bila masih QUEUED. Error generator/storage tidak menjadi fake success; COMPLETED hanya setelah object berhasil ditulis.
+- Report memakai data **saat worker generate**, bukan saat enqueue; exact protected snapshot bila ada. PDF ringkasan sections/klaster; XLSX juga sheet indikator. Label VERIFIED/PROVISIONAL dan generatedAt ada, tanpa tanda tangan/approval rekaan.
+
+## 10. Bridge, Operasi, Dan Batas Produksi
+
+- `GET /bridge/status` D/A query T -> `{healthCenterId,status:"CONFIGURATION_REQUIRED",enabled:false,reason:"Official provincial contract not provided"}`.
+- `POST /bridge/sync-batch` D/A body `{T,year?}` ->**503**, tidak enqueue atau menandai SYNCED. Year opsional divalidasi tetapi belum dipakai untuk sync.
+- Bridge sengaja **belum tersedia**, menunggu kontrak eksternal resmi: endpoint, autentikasi, payload, kode referensi, retry/idempotency dan persetujuan berbagi data. Tidak ada URL provinsi, secret, SLA, atau sertifikasi integrasi yang direka.
+- [Compose](backend/compose.yml) hanya scaffold development: binding host loopback, Redis tanpa auth/TLS, MinIO root credentials dari env, volume lokal; bukan HA/production deployment. App container [non-root `node`](backend/Dockerfile), tetapi ini tidak cukup untuk menyatakan hardening produksi.
+- [local.mjs](backend/scripts/local.mjs) menyediakan provisioning lokal eksplisit: membuat env dengan random secrets dan mode0600 hanya jika belum ada, tidak mencetak secrets/tidak membuat akun, menjalankan Compose lalu `init-storage.mjs` untuk memastikan bucket privat. Env existing tidak ditimpa; aplikasi runtime sendiri tetap tidak membuat bucket saat startup.
+- Sebelum produksi: role PostgreSQL runtime least-privilege terpisah dari migrator, TLS reverse proxy dan konfigurasi IP/rate-limit terpercaya, secret vault/rotation, policy bucket least-privilege, backup/restore drill DB+object, retensi audit/session/report/staging, malware scanning/quarantine, monitoring queue/DB/storage, alerting, kapasitas dan disaster recovery.
+- CORS exact `FRONTEND_URL`, Helmet, parser1MiB sudah ada; WAF, TLS termination, RLS, HA, signed approvals, audit eksternal, automatic cutoff/rollover, dan external bridge belum disediakan oleh kode ini.
+- Hasil terbaru yang dilaporkan:16 test default backend (termasuk test arsip section baru) dan build frontend lulus;8 subtest API baru dengan DB nyata lulus pada run terpisah setelah koreksi fixture. Dua suite backend lama lulus pada run saat fixture suite baru masih gagal; **belum ada klaim seluruh run gabungan backend terbaru lulus**. Run final master browser terpisah kini lulus seluruh flow dengan console bersih. Ketiga suite browser gabungan dan image non-root sebelumnya dilaporkan lulus. Pembaruan dokumentasi ini tidak menjalankan ulang test; hasil lokal ini bukan sertifikasi kesiapan produksi.
+- `npm audit` dilaporkan0 temuan setelah explicit overrides js-yaml5, deepmerge-ts8, uuid11 pada package.json/lock. Override major transitive perlu review kompatibilitas dan regression tests, bukan dianggap aman hanya karena audit0. SLA, kontrak privasi dan validasi domain tetap perlu persetujuan tersendiri.
+
+## 11. Pengujian Integrasi Dan Coverage
+
+Dari root: `npm run build`, `node --test backend/scripts/catalogue.test.mjs`, `npm --prefix backend run test`, `npm --prefix backend run build`, dan `TEST_E2E=true npm --prefix backend run test:e2e`. Backend e2e menggunakan env backend biasa dan dependency nyata, bukan otomatis `TEST_DATABASE_URL`; tanpa flag e2e di-skip. Fixtures/audit tidak dibersihkan, slot tahun backend test terbatas; gunakan environment disposable, jangan produksi.
+
+Suite baru [master-management.e2e.ts](backend/test/master-management.e2e.ts) mencakup CRUD/reset terkelola:8 subtest API dengan DB nyata dilaporkan lulus pada run terpisah setelah koreksi fixture. Dua suite lama lulus pada run yang masih gagal di fixture baru, bukan bukti run gabungan backend terbaru seluruhnya lulus.
+
+Command test default backend hanya mencakup `test/*.test.ts` dan kini16 test dilaporkan lulus, termasuk test arsip section baru. Delapan focused master tests dan5 operations tests di `src/` tidak termasuk command default. Jalankan dengan working directory **backend/**:
+
+```bash
+npx tsx --test src/master/masters.test.ts src/operations/operations.service.test.ts
 ```
 
----
+Browser runner: siapkan dependency root/backend, Chromium (`npx playwright install chromium`), migrasi dan seed katalog; nyalakan Vite development serta backend/PostgreSQL/Redis/MinIO nyata, lalu `npm run test:e2e` dari root. [Runner](tests/run-browser-e2e.mjs) membuat password acak jika `FE_E2E_PASSWORD` tidak disediakan, seed fixtures tanpa mencetak kredensial dan menjalankan tiga suite berurutan. URL default dapat dioverride lewat `FE_E2E_URL` (default `http://localhost:5175`) dan `FE_E2E_API_URL` (default `http://localhost:4000/api/v1`). Session suite memerlukan JWT secret backend **test** dari `backend/.env`/environment dan modul Vite development; ini bukan runner untuk bundle preview/produksi.
 
-### 7.3 Berkas Variabel Lingkungan (`.env.example`)
+- [frontend.e2e.mjs](tests/frontend.e2e.mjs): login tiga role, target/input bulanan persisten, evidence upload/finalize/download, session restore, izin PIC dan isolasi tenant Dinkes.
+- [workflow-browser.e2e.mjs](tests/workflow-browser.e2e.mjs): persiapan HTTP nyata, submit/verify/reopen UI, persisted locks, worker XLSX/PDF dan navigasi/overflow mobile.
+- [session-browser.e2e.mjs](tests/session-browser.e2e.mjs): access JWT expired dengan signature valid dan session claims nyata, respons401/refresh/retry backend tanpa mock HTTP, pending-write scope guard, logout revocation, password-change all-session revocation dan stale-refresh isolation.
+- [master-browser.e2e.mjs](tests/master-browser.e2e.mjs): jalankan **dari root** dengan `node tests/master-browser.e2e.mjs`; belum masuk runner gabungan. Run final kini lulus CRUD global Admin/Dinkes, visibilitas lintas Puskesmas, reset PIC, pencabutan session lama, password lama401/login baru200, cleanup arsip dan console bersih. Bukan lagi status pending; tidak dijalankan ulang dalam edit dokumentasi ini.
 
-```env
-# Application
-NODE_ENV=development
-PORT=4000
-APP_NAME="SIPKP PULSE Backend"
-APP_URL=http://localhost:4000
-FRONTEND_URL=http://localhost:5175
-
-# PostgreSQL Database (Prisma)
-DATABASE_URL="postgresql://sipkp_user:SecretPostgres2026!@localhost:5432/sipkp_db?schema=public&connection_limit=20"
-
-# Redis Cache & Queue
-REDIS_HOST=localhost
-REDIS_PORT=6379
-REDIS_PASSWORD=SecretRedis2026!
-REDIS_DB=0
-
-# Object Storage (MinIO / S3)
-MINIO_ENDPOINT="http://localhost:9000"
-MINIO_PUBLIC_ENDPOINT="http://localhost:9000"
-MINIO_ACCESS_KEY=minio_admin
-MINIO_SECRET_KEY=MinioSecretKey2026!
-MINIO_BUCKET_NAME=pkp-evidence
-MINIO_BUCKET_REPORTS=pkp-reports
-
-# Authentication Security (JWT & Argon2)
-JWT_SECRET="ganti_dengan_random_string_minimal_64_karakter_untuk_produksi"
-JWT_EXPIRATION="900s"
-REFRESH_TOKEN_SECRET="ganti_dengan_random_refresh_string_minimal_64_karakter"
-REFRESH_TOKEN_EXPIRATION="7d"
-
-# Rate Limiting (Throttler)
-THROTTLE_TTL=60
-THROTTLE_LIMIT=120
-
-# Provincial Bridge (Jawa Timur)
-PROVINCIAL_BRIDGE_URL="https://sipkp.dinkes.jatimprov.go.id/api/v2"
-PROVINCIAL_BRIDGE_CLIENT_ID="kab_malang_faskes_bridge"
-PROVINCIAL_BRIDGE_CLIENT_SECRET="secret_provinsi_2026"
-```
+Fixtures, laporan/object dan audit browser dipertahankan; tidak ada rollback/cleanup otomatis atau izin memakai produksi. Rate limit120/menit tetap berlaku pada actor (IP untuk route publik), login5/IP/menit; runner memberi jeda61detik antar suite. Siklus workflow terarah memakai9 request (1 mutasi +8 read periode/target/analytics), bukan reload full scope sekitar26 request; hindari reload penuh berulang atau tes paralel yang menghabiskan budget. Coverage tidak menjamin semua form master, bootstrap pertama, seluruh viewport, concurrency atau keamanan produksi sudah diuji.

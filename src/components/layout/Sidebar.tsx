@@ -13,9 +13,11 @@ import {
   UserPlus,
   Printer,
   FileCheck2,
-  CalendarRange
+  CalendarRange,
+  X
 } from 'lucide-react';
-import { pkpStore } from '../../services/mockState';
+import { pkpStore } from '../../services/apiStore';
+import { UserRole } from '../../types/pkp';
 import { AppLogo } from '../common/AppLogo';
 
 export type NavTab = 
@@ -36,6 +38,11 @@ interface SidebarProps {
   selectedKlaster: number;
   onSelectKlaster: (klasterId: number) => void;
   isDinkesMode: boolean;
+  userRole: UserRole;
+  globalMode: boolean;
+  busy: boolean;
+  selectedPuskesmas: string;
+  onClose: () => void;
   onOpenYearModal: () => void;
   onOpenStaffModal: () => void;
   onOpenExportModal: () => void;
@@ -47,13 +54,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
   selectedKlaster,
   onSelectKlaster,
   isDinkesMode,
+  userRole,
+  globalMode,
+  busy,
+  selectedPuskesmas,
+  onClose,
   onOpenYearModal,
   onOpenStaffModal,
   onOpenExportModal
 }) => {
   const currentYear = pkpStore.getCurrentYear();
 
-  const navItems = [
+  const navItems = userRole === 'PIC' ? [
+    { id: 'dashboard-pic' as NavTab, label: 'Indikator Saya', icon: ClipboardPen },
+    { id: 'recommendations' as NavTab, label: 'Rekomendasi & RTL', icon: MessageSquareCheck },
+  ] : [
     { id: 'dashboard-exec' as NavTab, label: 'Dashboard Kinerja PKP', icon: LayoutDashboard },
     { id: 'official-sheet7' as NavTab, label: 'Nilai Kinerja Resmi (Sheet 7)', icon: FileCheck2 },
     { id: 'dashboard-annual' as NavTab, label: 'Dashboard Tahunan (12 Bln)', icon: CalendarRange },
@@ -80,6 +95,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <aside className="w-72 min-w-[288px] max-w-[288px] bg-gradient-to-b from-obsidian-950 via-obsidian-900 to-obsidian-950 text-slate-300 flex flex-col flex-shrink-0 h-screen sticky top-0 border-r border-obsidian-800/80 shadow-2xl relative z-20 overflow-hidden">
       {/* Brand Header with AppLogo */}
       <div className="p-4 border-b border-obsidian-800/80 bg-obsidian-950/60 backdrop-blur-md">
+        <button type="button" onClick={onClose} aria-label="Tutup navigasi" className="md:hidden absolute top-3 right-3 p-2 rounded-lg hover:bg-slate-800"><X className="w-4 h-4" /></button>
         <AppLogo variant="compact" size="md" />
 
         {/* Live System Badge */}
@@ -90,7 +106,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
             </span>
             <span className="text-slate-300 font-medium">
-              {isDinkesMode ? 'Mode Dinas Kesehatan' : 'UPT PKM Kebonagung'}
+              {isDinkesMode ? 'Mode Dinas Kesehatan' : selectedPuskesmas}
             </span>
           </div>
           <span className="font-mono text-emerald-400 font-bold bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-500/30">
@@ -112,8 +128,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
               return (
                 <button
                   key={item.id}
+                  disabled={busy || (globalMode && item.id !== 'master-data')}
+                  title={globalMode && item.id !== 'master-data' ? 'Pilih Puskesmas dan tahun pelaporan terlebih dahulu' : undefined}
                   onClick={() => onSelectTab(item.id)}
-                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-semibold transition-all relative ${
+                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-semibold transition-all relative disabled:opacity-40 disabled:cursor-not-allowed ${
                     isActive
                       ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-lg shadow-emerald-950/50 border border-emerald-400/30 before:absolute before:left-0 before:top-2 before:bottom-2 before:w-1 before:rounded-r-full before:bg-cyan-300'
                       : 'text-slate-400 hover:bg-obsidian-800/70 hover:text-white'
@@ -128,13 +146,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         {/* Action Utilities (Year, Staff, Export) */}
-        <div className="pt-2 border-t border-slate-800">
+        {userRole !== 'PIC' && <div className="pt-2 border-t border-slate-800">
           <p className="px-3 text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">
             Utilitas & Konfigurasi
           </p>
           <div className="space-y-1">
             <button
               onClick={onOpenYearModal}
+              disabled={busy}
               className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg text-xs text-slate-300 hover:bg-slate-800 hover:text-white transition-colors"
             >
               <CalendarDays className="w-4 h-4 text-emerald-400" />
@@ -142,6 +161,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
             <button
               onClick={onOpenStaffModal}
+              disabled={busy || globalMode}
               className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg text-xs text-slate-300 hover:bg-slate-800 hover:text-white transition-colors"
             >
               <UserPlus className="w-4 h-4 text-teal-400" />
@@ -149,13 +169,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
             <button
               onClick={onOpenExportModal}
+              disabled={busy || globalMode}
               className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg text-xs text-slate-300 hover:bg-slate-800 hover:text-white transition-colors"
             >
               <Printer className="w-4 h-4 text-indigo-400" />
               <span>Ekspor & Cetak Laporan</span>
             </button>
           </div>
-        </div>
+        </div>}
 
         {/* Klaster Filter Quick Selector (When on data-entry) */}
         {activeTab === 'data-entry' && (
@@ -183,15 +204,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
 
         {/* Provincial Link Info */}
-        <div className="p-3 bg-obsidian-850/80 rounded-xl border border-obsidian-700/60 text-xs shadow-inner">
+        {userRole !== 'PIC' && <div className="p-3 bg-obsidian-850/80 rounded-xl border border-obsidian-700/60 text-xs shadow-inner">
           <div className="flex items-center gap-2 text-emerald-400 font-bold mb-1">
             <FileSpreadsheet className="w-3.5 h-3.5" />
             <span className="text-[11px] tracking-wide">Integritas Kode Provinsi</span>
           </div>
           <p className="text-[11px] text-slate-400 leading-relaxed">
-            Format 272 indikator baku terkoneksi langsung ke standar SIPKP Jawa Timur tanpa re-kode.
+            Katalog {allIndicators.length} indikator dari server SIPKP untuk periode terpilih.
           </p>
-        </div>
+        </div>}
       </div>
 
       {/* Footer / Status */}

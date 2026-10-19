@@ -1,42 +1,72 @@
-import React, { useState } from 'react';
-import { pkpStore } from '../../services/mockState';
+import React, { useEffect, useState, useSyncExternalStore } from 'react';
+import { pkpStore } from '../../services/apiStore';
+import { api } from '../../services/apiClient';
 import { DinkesRecommendation } from '../../types/pkp';
 import { 
   MessageSquareCheck, 
   Send, 
-  CheckCircle2, 
-  Clock, 
-  AlertCircle, 
   Edit3,
   Building,
   Check
 } from 'lucide-react';
 
 export const RecommendationView: React.FC = () => {
-  const [recommendations, setRecommendations] = useState<DinkesRecommendation[]>(
-    pkpStore.getRecommendations()
-  );
+  useSyncExternalStore(pkpStore.subscribe, pkpStore.getSnapshot, pkpStore.getServerSnapshot);
+  const recommendations = pkpStore.getRecommendations();
+  const role = pkpStore.getCurrentUser().role;
+  const year = pkpStore.getCurrentYear();
+  const centerId = pkpStore.getSelectedHealthCenterId();
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [analysis, setAnalysis] = useState('');
+  const [feedback, setFeedback] = useState({ sectionCode: '', quarter: '1', recommendationText: '' });
+  const sections = pkpStore.getSubKlasters();
+  const disabled = pending || pkpStore.getLoadState().loading;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [rtlInput, setRtlInput] = useState<string>('');
   const [statusInput, setStatusInput] = useState<'PENDING' | 'IN_PROGRESS' | 'RESOLVED'>('PENDING');
   const [notification, setNotification] = useState<string | null>(null);
+  useEffect(() => {
+    setEditingId(null); setRtlInput(''); setAnalysis(''); setError(null); setNotification(null);
+    setFeedback({ sectionCode: '', quarter: '1', recommendationText: '' });
+  }, [centerId, year]);
 
   const handleStartEdit = (rec: DinkesRecommendation) => {
     setEditingId(rec.id);
     setRtlInput(rec.puskesmasRtl);
     setStatusInput(rec.status);
+    setAnalysis((rec as DinkesRecommendation & { analisisPenyebab?: string }).analisisPenyebab ?? '');
+    setError(null);
   };
 
-  const handleSaveRtl = (recId: string) => {
-    pkpStore.updateRecommendationRtl(recId, rtlInput, statusInput);
-    setRecommendations([...pkpStore.getRecommendations()]);
-    setEditingId(null);
-    setNotification('Rencana Tindak Lanjut (RTL) berhasil diperbarui!');
-    setTimeout(() => setNotification(null), 3000);
+  const handleSaveRtl = async (recId: string) => {
+    if (disabled || role !== 'ADMIN_PUSKESMAS' || !centerId) return;
+    setPending(true); setError(null); setNotification(null);
+    try {
+      // The store's RTL helper omits the backend-supported cause analysis field.
+      await api.request(`/recommendations/${encodeURIComponent(recId)}/action-plan`, { method: 'PATCH', body: { healthCenterId: centerId, analisisPenyebab: analysis, actionPlanText: rtlInput, statusFollowUp: statusInput } });
+      await pkpStore.refreshScope();
+      setEditingId(null);
+      setNotification('Analisis penyebab dan RTL berhasil diperbarui.');
+    } catch (error) { setError(error instanceof Error ? error.message : 'Penyimpanan RTL gagal. Coba lagi.'); }
+    finally { setPending(false); }
+  };
+  const saveFeedback = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (disabled || role !== 'DINKES_ADMIN') return;
+    if (!sections.some(s => s.code === feedback.sectionCode) || !feedback.recommendationText.trim()) { setError('Pilih bagian dan isi rekomendasi Dinkes.'); return; }
+    setPending(true); setError(null); setNotification(null);
+    try {
+      await pkpStore.addFeedback(feedback.sectionCode, Number(feedback.quarter), feedback.recommendationText.trim());
+      setFeedback({ sectionCode: '', quarter: '1', recommendationText: '' });
+      setNotification('Rekomendasi Dinkes berhasil disimpan.');
+    } catch (error) { setError(error instanceof Error ? error.message : 'Penyimpanan rekomendasi gagal. Coba lagi.'); }
+    finally { setPending(false); }
   };
 
   return (
     <div className="space-y-6">
+      {error && <p role="alert" className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-sm">{error}</p>}
       {/* Header */}
       <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
@@ -59,6 +89,21 @@ export const RecommendationView: React.FC = () => {
           </div>
         )}
       </div>
+
+      {role === 'DINKES_ADMIN' && <form onSubmit={saveFeedback} className="bg-white p-5 rounded-xl border border-slate-200 space-y-3">
+        <fieldset disabled={disabled} className="space-y-3">
+          <h3 className="font-bold text-sm text-slate-800">Tambah / Perbarui Rekomendasi Dinkes</h3>
+          <p className="text-xs text-slate-500">{pkpStore.getSelectedHealthCenter()?.name} / {year}. Bagian dan triwulan yang sama memperbarui rekomendasi yang sudah ada.</p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <label className="text-xs font-semibold text-slate-600">Tahun<input readOnly value={year} className="block w-full border rounded-lg p-2 bg-slate-50" /></label>
+            <label className="text-xs font-semibold text-slate-600">Triwulan<select value={feedback.quarter} onChange={e => setFeedback({ ...feedback, quarter: e.target.value })} className="block w-full border rounded-lg p-2">{[1, 2, 3, 4].map(q => <option key={q}>{q}</option>)}</select></label>
+            <label className="text-xs font-semibold text-slate-600">Bagian<select required value={feedback.sectionCode} onChange={e => setFeedback({ ...feedback, sectionCode: e.target.value })} className="block w-full border rounded-lg p-2"><option value="" disabled>Pilih bagian</option>{sections.map(s => <option key={s.code} value={s.code}>{s.code} {s.name}</option>)}</select></label>
+          </div>
+          <label className="block text-xs font-semibold text-slate-600">Rekomendasi<textarea required maxLength={10000} value={feedback.recommendationText} onChange={e => setFeedback({ ...feedback, recommendationText: e.target.value })} className="block w-full h-24 p-3 border border-slate-300 rounded-lg" /></label>
+          <button type="submit" className="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold">{pending ? 'Menyimpan...' : 'Simpan Rekomendasi'}</button>
+        </fieldset>
+      </form>}
+      {!recommendations.length && <p className="p-5 text-sm text-slate-500">Belum ada rekomendasi untuk Puskesmas dan tahun terpilih.</p>}
 
       {/* Recommendation Cards List */}
       <div className="grid grid-cols-1 gap-4">
@@ -94,15 +139,17 @@ export const RecommendationView: React.FC = () => {
                   <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${badgeColor}`}>
                     {statusText}
                   </span>
-                  {!isEditing && (
+                  {!isEditing && role === 'ADMIN_PUSKESMAS' && (
                     <button
+                      disabled={disabled}
                       onClick={() => handleStartEdit(rec)}
                       className="px-2.5 py-1 rounded bg-white hover:bg-emerald-50 text-slate-600 hover:text-emerald-700 border border-slate-300 text-xs font-semibold transition-colors flex items-center gap-1"
                     >
                       <Edit3 className="w-3.5 h-3.5" />
                       <span>Respons RTL</span>
                     </button>
-                  )}
+                   )}
+                  {role === 'DINKES_ADMIN' && <button disabled={disabled} onClick={() => { setFeedback({ sectionCode: rec.sectionCode, quarter: String(rec.quarter), recommendationText: rec.recommendationText }); setError(null); }} className="px-2.5 py-1 rounded bg-white border border-slate-300 text-xs font-semibold">Edit Rekomendasi</button>}
                 </div>
               </div>
 
@@ -126,8 +173,10 @@ export const RecommendationView: React.FC = () => {
                   </div>
 
                   {isEditing ? (
-                    <div className="space-y-3">
+                    <fieldset disabled={disabled} className="space-y-3">
+                      <label className="block text-xs font-semibold text-slate-600">Analisis Penyebab<textarea maxLength={10000} value={analysis} onChange={e => setAnalysis(e.target.value)} className="block w-full h-24 p-3 border border-slate-300 rounded-lg" /></label>
                       <textarea
+                        maxLength={10000}
                         value={rtlInput}
                         onChange={(e) => setRtlInput(e.target.value)}
                         placeholder="Tuliskan rencana perbaikan mutu, jadwal kegiatan, dan penanggung jawab..."
@@ -161,9 +210,10 @@ export const RecommendationView: React.FC = () => {
                           </button>
                         </div>
                       </div>
-                    </div>
+                    </fieldset>
                   ) : (
                     <div className="p-3.5 rounded-lg bg-emerald-50/50 border border-emerald-100 text-slate-800 text-xs leading-relaxed font-medium">
+                      <p className="mb-2 whitespace-pre-line"><strong>Analisis penyebab: </strong>{(rec as DinkesRecommendation & { analisisPenyebab?: string }).analisisPenyebab || 'Belum diisi.'}</p>
                       {rec.puskesmasRtl || (
                         <span className="text-slate-400 italic">Belum ada RTL yang diinputkan.</span>
                       )}

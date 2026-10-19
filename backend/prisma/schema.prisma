@@ -1,0 +1,350 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  DINKES_ADMIN
+  ADMIN_PUSKESMAS
+  PIC
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum PeriodStatus {
+  DRAFT
+  SUBMITTED
+  VERIFIED
+  REVISION_REQUIRED
+}
+
+enum Polarity {
+  HIGHER_IS_BETTER
+  LOWER_IS_BETTER
+  TIERED_BRACKETS
+  BINARY
+}
+
+enum UploadStatus {
+  PENDING
+  READY
+  ATTACHED
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model HealthCenter {
+  id              String           @id @default(uuid()) @db.Uuid
+  code            String           @unique
+  name            String
+  address         String?
+  district        String
+  headName        String?
+  headNip         String?
+  phone           String?
+  email           String?
+  isActive        Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  users           User[]
+  annualTargets   AnnualTarget[]
+  picAssignments  PicAssignment[]
+  monthlyRecords  MonthlyRecord[]
+  periodLocks     PeriodLock[]
+  uploads         Upload[]
+  recommendations Recommendation[]
+  auditLogs       AuditLog[]
+  exportJobs      ExportJob[]
+
+  @@map("health_centers")
+}
+
+model User {
+  id              String       @id @default(uuid()) @db.Uuid
+  healthCenterId  String?      @db.Uuid
+  healthCenter    HealthCenter? @relation(fields: [healthCenterId], references: [id], onDelete: Restrict)
+  username        String       @unique
+  email           String?      @unique
+  name            String
+  nip             String?
+  passwordHash    String
+  role            Role
+  status          UserStatus   @default(ACTIVE)
+  tokenVersion    Int          @default(0)
+  phone           String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  sessions        Session[]
+  picAssignments  PicAssignment[]
+  submittedLocks  PeriodLock[] @relation("SubmittedBy")
+  verifiedLocks   PeriodLock[] @relation("VerifiedBy")
+  uploads         Upload[]
+  auditLogs       AuditLog[]
+  exportJobs      ExportJob[]
+
+  @@index([healthCenterId, role])
+  @@map("users")
+}
+
+model Session {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @db.Uuid
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshHash String
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime @default(now())
+
+  @@index([userId, expiresAt])
+  @@map("sessions")
+}
+
+model YearPeriod {
+  year            Int              @id
+  cutoffDay       Int              @default(10)
+  isLocked        Boolean          @default(false)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  annualTargets   AnnualTarget[]
+  picAssignments  PicAssignment[]
+  monthlyRecords  MonthlyRecord[]
+  periodLocks     PeriodLock[]
+  recommendations Recommendation[]
+
+  @@map("year_periods")
+}
+
+model Section {
+  code            String           @id
+  name            String
+  klasterId       Int
+  parentCode      String?
+  parent          Section?         @relation("SectionTree", fields: [parentCode], references: [code], onDelete: Restrict)
+  children        Section[]        @relation("SectionTree")
+  order           Int              @default(0)
+  isActive        Boolean          @default(true)
+  indicators      Indicator[]
+  recommendations Recommendation[]
+
+  @@index([parentCode, order])
+  @@map("sections")
+}
+
+model Indicator {
+  id                   String          @id
+  klasterId            Int
+  sectionCode          String
+  section              Section         @relation(fields: [sectionCode], references: [code], onDelete: Restrict)
+  no                   String
+  kegiatan             String
+  indikator            String
+  satuan               String
+  targetDisplay        String
+  targetNumeric        Decimal         @db.Decimal(14, 6)
+  totalSasaranDefault   Decimal         @db.Decimal(14, 4)
+  targetSasaranDefault  Decimal         @db.Decimal(14, 4)
+  polarity             Polarity
+  scoringVersion       String          @default("ILP_2026_V1")
+  formulaRaw           String?
+  notes                String?
+  isActive             Boolean         @default(true)
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+  annualTargets        AnnualTarget[]
+  picAssignments       PicAssignment[]
+  monthlyRecords       MonthlyRecord[]
+
+  @@index([sectionCode, isActive])
+  @@map("indicators")
+}
+
+model AnnualTarget {
+  id              String       @id @default(uuid()) @db.Uuid
+  healthCenterId  String       @db.Uuid
+  healthCenter    HealthCenter @relation(fields: [healthCenterId], references: [id], onDelete: Restrict)
+  indicatorId     String
+  indicator       Indicator    @relation(fields: [indicatorId], references: [id], onDelete: Restrict)
+  year            Int
+  yearPeriod      YearPeriod   @relation(fields: [year], references: [year], onDelete: Restrict)
+  targetPct       Decimal      @db.Decimal(14, 4)
+  totalSasaran    Decimal      @db.Decimal(14, 4)
+  targetSasaran   Decimal      @db.Decimal(14, 4)
+  isLocked        Boolean      @default(false)
+  updatedAt       DateTime     @updatedAt
+
+  @@unique([healthCenterId, indicatorId, year])
+  @@index([year])
+  @@map("annual_targets")
+}
+
+model PicAssignment {
+  id             String       @id @default(uuid()) @db.Uuid
+  healthCenterId String       @db.Uuid
+  healthCenter   HealthCenter @relation(fields: [healthCenterId], references: [id], onDelete: Restrict)
+  indicatorId    String
+  indicator      Indicator    @relation(fields: [indicatorId], references: [id], onDelete: Restrict)
+  year           Int
+  yearPeriod     YearPeriod   @relation(fields: [year], references: [year], onDelete: Restrict)
+  picUserId      String       @db.Uuid
+  picUser        User         @relation(fields: [picUserId], references: [id], onDelete: Restrict)
+  assignedAt     DateTime     @default(now())
+
+  @@unique([healthCenterId, indicatorId, year])
+  @@index([picUserId, year])
+  @@index([year])
+  @@map("pic_assignments")
+}
+
+model MonthlyRecord {
+  id              String       @id @default(uuid()) @db.Uuid
+  healthCenterId  String       @db.Uuid
+  healthCenter    HealthCenter @relation(fields: [healthCenterId], references: [id], onDelete: Restrict)
+  indicatorId     String
+  indicator       Indicator    @relation(fields: [indicatorId], references: [id], onDelete: Restrict)
+  year            Int
+  yearPeriod      YearPeriod   @relation(fields: [year], references: [year], onDelete: Restrict)
+  month           Int
+  pencapaianRiil  Decimal      @db.Decimal(14, 4)
+  totalSasaran    Decimal      @db.Decimal(14, 4)
+  targetSasaran   Decimal      @db.Decimal(14, 4)
+  capaianRiilPct  Decimal?     @db.Decimal(14, 4)
+  nilaiKinerja    Decimal?     @db.Decimal(14, 4)
+  scoringVersion  String
+  evidenceId      String?      @db.Uuid
+  evidence        Upload?      @relation(fields: [evidenceId], references: [id], onDelete: Restrict)
+  notes           String?
+  syncStatus      String       @default("NOT_SYNCED")
+  updatedBy       String
+  updatedAt       DateTime     @updatedAt
+  createdAt       DateTime     @default(now())
+
+  @@unique([healthCenterId, indicatorId, year, month])
+  @@index([healthCenterId, year, month])
+  @@index([year])
+  @@index([evidenceId])
+  @@map("monthly_records")
+}
+
+model PeriodLock {
+  id             String       @id @default(uuid()) @db.Uuid
+  healthCenterId String       @db.Uuid
+  healthCenter   HealthCenter @relation(fields: [healthCenterId], references: [id], onDelete: Restrict)
+  year           Int
+  yearPeriod     YearPeriod   @relation(fields: [year], references: [year], onDelete: Restrict)
+  periodNumber   Int
+  isQuarter      Boolean      @default(false)
+  status         PeriodStatus @default(DRAFT)
+  submittedAt    DateTime?
+  submittedById  String?      @db.Uuid
+  submittedBy    User?        @relation("SubmittedBy", fields: [submittedById], references: [id], onDelete: Restrict)
+  verifiedAt     DateTime?
+  verifiedById   String?      @db.Uuid
+  verifiedBy     User?        @relation("VerifiedBy", fields: [verifiedById], references: [id], onDelete: Restrict)
+  revisionNote   String?
+  snapshot       Json?
+  revision       Int          @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([healthCenterId, year, periodNumber, isQuarter])
+  @@index([year])
+  @@map("period_locks")
+}
+
+model Upload {
+  id             String          @id @default(uuid()) @db.Uuid
+  healthCenterId String          @db.Uuid
+  healthCenter   HealthCenter    @relation(fields: [healthCenterId], references: [id], onDelete: Restrict)
+  userId         String          @db.Uuid
+  user           User            @relation(fields: [userId], references: [id], onDelete: Restrict)
+  year           Int
+  month          Int
+  objectKey      String          @unique
+  filename       String
+  mimeType       String
+  sizeBytes      Int
+  status         UploadStatus    @default(PENDING)
+  etag           String?
+  expiresAt      DateTime
+  createdAt      DateTime        @default(now())
+  monthlyRecords MonthlyRecord[]
+
+  @@index([healthCenterId, year, month])
+  @@index([userId])
+  @@map("uploads")
+}
+
+model Recommendation {
+  id                  String       @id @default(uuid()) @db.Uuid
+  healthCenterId      String       @db.Uuid
+  healthCenter        HealthCenter @relation(fields: [healthCenterId], references: [id], onDelete: Restrict)
+  year                Int
+  yearPeriod          YearPeriod   @relation(fields: [year], references: [year], onDelete: Restrict)
+  quarter             Int
+  sectionCode         String
+  section             Section      @relation(fields: [sectionCode], references: [code], onDelete: Restrict)
+  recommendationText  String
+  analisisPenyebab     String?
+  actionPlanText      String?
+  targetPenyelesaian   String?
+  picName             String?
+  statusFollowUp      String       @default("PENDING")
+  reviewedBy          String
+  updatedAt           DateTime     @updatedAt
+  createdAt           DateTime     @default(now())
+
+  @@unique([healthCenterId, year, quarter, sectionCode])
+  @@index([year])
+  @@index([sectionCode])
+  @@map("recommendations")
+}
+
+model AuditLog {
+  id             String        @id @default(uuid()) @db.Uuid
+  healthCenterId String?       @db.Uuid
+  healthCenter   HealthCenter? @relation(fields: [healthCenterId], references: [id], onDelete: Restrict)
+  userId         String?       @db.Uuid
+  user           User?         @relation(fields: [userId], references: [id], onDelete: Restrict)
+  actorName      String
+  action         String
+  details        Json
+  createdAt      DateTime      @default(now())
+
+  @@index([healthCenterId, createdAt])
+  @@index([userId, createdAt])
+  @@map("audit_logs")
+}
+
+model ExportJob {
+  id             String       @id @default(uuid()) @db.Uuid
+  healthCenterId String       @db.Uuid
+  healthCenter   HealthCenter @relation(fields: [healthCenterId], references: [id], onDelete: Restrict)
+  userId         String       @db.Uuid
+  user           User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+  year           Int
+  quarter        Int
+  format         String
+  status         JobStatus    @default(QUEUED)
+  objectKey      String?
+  error          String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([healthCenterId, createdAt])
+  @@index([userId])
+  @@index([status, createdAt])
+  @@map("export_jobs")
+}

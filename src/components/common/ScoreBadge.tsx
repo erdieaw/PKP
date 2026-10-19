@@ -1,19 +1,24 @@
 import React from 'react';
 
 interface ScoreBadgeProps {
-  score: number;
+  score: number | null | undefined;
   size?: 'sm' | 'md' | 'lg';
 }
 
 export const ScoreBadge: React.FC<ScoreBadgeProps> = ({ score, size = 'sm' }) => {
-  const isBaik = score >= 91;
-  const isCukup = score >= 81 && score < 91;
+  const hasScore = typeof score === 'number' && Number.isFinite(score);
+  const isBaik = hasScore && score >= 91;
+  const isCukup = hasScore && score >= 81 && score < 91;
 
   let colorClasses = 'bg-rose-50 text-rose-700 border-rose-200';
   let dotColor = 'bg-rose-500';
   let label = 'Kurang';
 
-  if (isBaik) {
+  if (!hasScore) {
+    colorClasses = 'bg-slate-100 text-slate-600 border-slate-200';
+    dotColor = 'bg-slate-400';
+    label = 'Belum dinilai';
+  } else if (isBaik) {
     colorClasses = 'bg-emerald-50 text-emerald-700 border-emerald-200';
     dotColor = 'bg-emerald-500';
     label = 'Baik';
@@ -32,7 +37,7 @@ export const ScoreBadge: React.FC<ScoreBadgeProps> = ({ score, size = 'sm' }) =>
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-md font-mono font-bold border ${colorClasses} ${sizeClasses}`}>
       <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
-      <span>{score.toFixed(1)}%</span>
+      <span>{hasScore ? `${score.toFixed(1)}%` : '-'}</span>
       <span className="text-[10px] font-sans font-normal opacity-75">({label})</span>
     </span>
   );

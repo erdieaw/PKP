@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef, useSyncExternalStore } from 'react';
 import { OfficialIndicator } from '../../types/pkp';
-import { pkpStore } from '../../services/mockState';
+import { pkpStore } from '../../services/apiStore';
 import { 
   X, 
   Target, 
@@ -33,16 +33,32 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
   onClose,
   onSelectIndicator
 }) => {
+  useSyncExternalStore(pkpStore.subscribe, pkpStore.getSnapshot, pkpStore.getServerSnapshot);
+  const [realisasiInput, setRealisasiInput] = useState('');
+  const [notesInput, setNotesInput] = useState('');
+  const [evidenceId, setEvidenceId] = useState<string | null>(null);
+  const [evidenceName, setEvidenceName] = useState('');
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [savedSuccess, setSavedSuccess] = useState(false);
+  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const generation = useRef(0);
+  const year = pkpStore.getCurrentYear();
+  const center = pkpStore.getSelectedHealthCenterId();
+  useEffect(() => {
+    generation.current++;
+    const record = indicator ? pkpStore.getMonthlyRecord(indicator.id, selectedMonth) : null;
+    setRealisasiInput(record?.pencapaianRiil?.toString() ?? '');
+    setNotesInput(record?.notes ?? ''); setEvidenceId(record?.evidenceId ?? null);
+    setEvidenceName(''); setError(null); setSavedSuccess(false); setPending(false); setDownloadUrl(null);
+    return () => { generation.current++; };
+  }, [indicator?.id, selectedMonth, year, center]);
   if (!indicator) return null;
 
   const isHead = !!indicator.isHead;
   const officialCode = isHead ? `HEAD ${indicator.sectionCode}` : `${indicator.sectionCode}.${indicator.no.replace('.', '')}`;
   const rec = pkpStore.getMonthlyRecord(indicator.id, selectedMonth);
-  const target = pkpStore.getAnnualTargets()[indicator.id] || {
-    targetPct: indicator.targetNumeric * 100,
-    totalSasaran: indicator.totalSasaranDefault,
-    targetSasaran: indicator.targetSasaranDefault
-  };
+  const target = pkpStore.getAnnualTargets()[indicator.id];
   const pic = pkpStore.getPicForIndicator(indicator.id);
   const headAgg = isHead ? pkpStore.getSubKlasterAggregation(indicator.sectionCode, selectedMonth) : null;
 
@@ -54,72 +70,49 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
       )
     : [];
 
-  const [realisasiInput, setRealisasiInput] = useState<string>(rec.pencapaianRiil.toString());
-  const [notesInput, setNotesInput] = useState<string>(rec.notes || '');
-  const [evidenceUploaded, setEvidenceUploaded] = useState<boolean>(!!rec.notes);
-  const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
-  
-  // Sync state
-  const [isSyncing, setIsSyncing] = useState<boolean>(false);
-  const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
-  const [showApiPayload, setShowApiPayload] = useState<boolean>(false);
-
-  const handleSave = () => {
-    if (isHead) return;
-    const val = parseFloat(realisasiInput) || 0;
-    pkpStore.updateMonthlyInput(indicator.id, selectedMonth, val, notesInput);
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 2500);
+  const user = pkpStore.getCurrentUser();
+  const canEdit = !pkpStore.getLoadState().loading && !isHead && !pkpStore.isPeriodLocked(year, selectedMonth) &&
+    (user.role === 'ADMIN_PUSKESMAS' || (user.role === 'PIC' && pkpStore.getAssignments()[indicator.id] === user.id));
+  const handleSave = async () => {
+    if (!canEdit || pending) return;
+    const val = Number(realisasiInput);
+    if (!realisasiInput.trim() || !Number.isFinite(val) || val < 0) { setError('Realisasi harus berupa angka valid nonnegatif.'); return; }
+    const epoch = generation.current;
+    setPending(true); setError(null); setSavedSuccess(false);
+    try {
+      await pkpStore.saveRecord(indicator.id, selectedMonth, { pencapaianRiil: val, notes: notesInput, evidenceId });
+      if (epoch === generation.current) setSavedSuccess(true);
+    } catch (e) { if (epoch === generation.current) setError(e instanceof Error ? e.message : 'Penyimpanan gagal.'); }
+    finally { if (epoch === generation.current) setPending(false); }
   };
-
-  const handleSyncElement = () => {
-    if (isHead) return;
-    setIsSyncing(true);
-    setTimeout(() => {
-      pkpStore.syncElementToProvinsi(indicator.id, selectedMonth);
-      setIsSyncing(false);
-      setSyncFeedback(`Elemen [${officialCode}] berhasil disinkronkan ke server SIPKP Provinsi!`);
-      setTimeout(() => setSyncFeedback(null), 3500);
-    }, 450);
+  const handleUpload = async (file?: File) => {
+    if (!file || pending || !canEdit) return;
+    const epoch = generation.current;
+    setPending(true); setError(null); setSavedSuccess(false);
+    try {
+      const metadata = await pkpStore.uploadEvidence(file, selectedMonth);
+      if (epoch === generation.current) { setEvidenceId(metadata.evidenceId); setEvidenceName(file.name); setDownloadUrl(null); }
+    } catch (e) { if (epoch === generation.current) setError(e instanceof Error ? e.message : 'Unggah gagal.'); }
+    finally { if (epoch === generation.current) setPending(false); }
+  };
+  const handleDownload = async () => {
+    if (!evidenceId || pending) return;
+    const epoch = generation.current;
+    setPending(true); setError(null);
+    try {
+      const result = await pkpStore.getEvidenceDownload(evidenceId);
+      if (epoch === generation.current) setDownloadUrl(result.downloadUrl);
+    } catch (e) { if (epoch === generation.current) setError(e instanceof Error ? e.message : 'Unduhan gagal.'); }
+    finally { if (epoch === generation.current) setPending(false); }
   };
 
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
 
-  // Current sync status
-  const syncStatus = rec.syncStatus || 'PENDING_SYNC';
-  const isSynced = syncStatus === 'SYNCED';
-
-  // Mock API payload for Provincial SIPKP Bridge
-  const provincialPayload = {
-    provinsi_endpoint: "POST /api/v1/pkp/element-sync",
-    puskesmas_id: "35070101",
-    puskesmas_name: "Puskesmas Kebonagung",
-    dinas_kesehatan: "Dinas Kesehatan Kabupaten Malang",
-    official_code: officialCode,
-    indicator_title: indicator.indikator,
-    period: {
-      month: selectedMonth,
-      year: 2026,
-      subklaster: indicator.sectionCode
-    },
-    performance: {
-      realisasi_fisik: isHead ? headAgg?.averageCapaian : parseFloat(realisasiInput) || 0,
-      satuan: indicator.satuan,
-      target_persen: target.targetPct,
-      nilai_kinerja: isHead ? headAgg?.averageScore : rec.nilaiKinerja,
-      capaian_riil_pct: isHead ? headAgg?.averageCapaian : rec.capaianRiilPct
-    },
-    meta: {
-      pic_name: pic.name,
-      pic_role: pic.role,
-      sync_batch_id: rec.syncBatchId || `PRV-SYNC-2026-M${selectedMonth}-${indicator.id}`,
-      timestamp_sync: rec.syncedAt || new Date().toISOString()
-    }
-  };
 
   return (
     <div className="fixed inset-0 z-50 overflow-hidden bg-slate-900/40 backdrop-blur-xs flex justify-end">
       <div 
+        role="dialog" aria-modal="true" aria-label="Rincian indikator"
         className="w-full max-w-xl bg-white h-full shadow-2xl flex flex-col border-l border-slate-200 animate-slide-in"
         onClick={(e) => e.stopPropagation()}
       >
@@ -144,6 +137,7 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
             )}
           </div>
           <button 
+            aria-label="Tutup rincian indikator"
             onClick={onClose}
             className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200 transition-colors"
           >
@@ -153,6 +147,8 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
 
         {/* Drawer Body */}
         <div className="flex-1 overflow-y-auto p-5 space-y-5 text-xs">
+          {error && <p role="alert" className="p-3 bg-rose-50 text-rose-800 rounded-lg">{error}</p>}
+          {pending && <p role="status">Memproses permintaan server...</p>}
           {/* Indicator Title & Section */}
           <div className="space-y-1">
             <h3 className="text-base font-bold text-slate-900 leading-snug">
@@ -189,11 +185,11 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
               <div className="grid grid-cols-4 gap-2 pt-2 border-t border-purple-200 text-center">
                 <div className="bg-white p-2 rounded-lg border border-purple-100">
                   <span className="text-[10px] text-slate-500 font-medium block">Rerata Skor</span>
-                  <p className="font-mono font-bold text-purple-900 text-sm mt-0.5">{headAgg.averageScore}</p>
+                  <p className="font-mono font-bold text-purple-900 text-sm mt-0.5">{headAgg.averageScore ?? '-'}</p>
                 </div>
                 <div className="bg-white p-2 rounded-lg border border-purple-100">
                   <span className="text-[10px] text-slate-500 font-medium block">Rerata Capaian</span>
-                  <p className="font-mono font-bold text-purple-900 text-sm mt-0.5">{headAgg.averageCapaian}%</p>
+                  <p className="font-mono font-bold text-purple-900 text-sm mt-0.5">{headAgg.averageCapaian == null ? '-' : `${headAgg.averageCapaian}%`}</p>
                 </div>
                 <div className="bg-white p-2 rounded-lg border border-purple-100">
                   <span className="text-[10px] text-slate-500 font-medium block">Child Elemen</span>
@@ -201,7 +197,7 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
                 </div>
                 <div className="bg-white p-2 rounded-lg border border-purple-100">
                   <span className="text-[10px] text-slate-500 font-medium block">Sinkronisasi</span>
-                  <p className="font-mono font-bold text-emerald-700 text-sm mt-0.5">{headAgg.syncedCount}/{headAgg.childCount}</p>
+                  <p className="font-mono font-bold text-slate-500 text-sm mt-0.5">Belum tersedia</p>
                 </div>
               </div>
             </div>
@@ -218,78 +214,26 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
                   Status Sinkronisasi Provinsi
                 </span>
               </div>
-              {isHead ? (
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-400/30 text-[10px] font-bold">
-                  {headAgg?.syncedCount}/{headAgg?.childCount} Child Sinkron
-                </span>
-              ) : isSynced ? (
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 text-[10px] font-bold">
-                  <CheckCircle className="w-3 h-3 text-emerald-400" />
-                  <span>Tersinkron ke Provinsi</span>
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-400/30 text-[10px] font-bold">
-                  <AlertTriangle className="w-3 h-3 text-amber-400" />
-                  <span>Draft Lokal (Belum Sinkron)</span>
-                </span>
-              )}
+              <span className="text-amber-300">Integrasi belum tersedia</span>
             </div>
 
             <div className="grid grid-cols-2 gap-2 text-[11px] pt-1 border-t border-slate-800">
               <div>
                 <span className="text-slate-400 text-[10px]">Waktu Sinkronisasi Terakhir:</span>
                 <p className="font-mono font-semibold text-slate-200">
-                  {rec.syncedAt || (isSynced ? '31 Mar 2026 16:45' : 'Belum pernah')}
+                  {rec.syncedAt ?? '-'}
                 </p>
               </div>
               <div>
                 <span className="text-slate-400 text-[10px]">Nomor Batch Transmisi SIPKP:</span>
                 <p className="font-mono text-emerald-300 truncate font-semibold" title={rec.syncBatchId || 'Belum dibuat'}>
-                  {rec.syncBatchId || (isSynced ? `PRV-2026-TW1-${indicator.id}` : 'Draft Lokal')}
+                  {rec.syncBatchId ?? '-'}
                 </p>
               </div>
             </div>
 
-            {!isHead && (
-              <div className="flex items-center justify-between pt-2 border-t border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setShowApiPayload(!showApiPayload)}
-                  className="text-slate-400 hover:text-slate-200 text-[11px] inline-flex items-center gap-1 transition-colors"
-                >
-                  <Code className="w-3.5 h-3.5" />
-                  <span>{showApiPayload ? 'Sembunyikan Payload API' : 'Lihat Payload REST API SIPKP'}</span>
-                  {showApiPayload ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                </button>
-
-                <button
-                  onClick={handleSyncElement}
-                  disabled={isSyncing}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
-                    isSynced
-                      ? 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
-                      : 'bg-emerald-500 hover:bg-emerald-600 text-white active:scale-98'
-                  }`}
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                  <span>{isSyncing ? 'Mengirim Data...' : isSynced ? 'Kirim Ulang ke Provinsi' : 'Sinkronkan Sekarang'}</span>
-                </button>
-              </div>
-            )}
-
-            {syncFeedback && (
-              <p className="text-[11px] text-emerald-300 font-bold flex items-center gap-1 pt-1 animate-fade-in">
-                <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
-                <span>{syncFeedback}</span>
-              </p>
-            )}
-
-            {/* Accordion JSON Payload */}
-            {showApiPayload && (
-              <div className="mt-2 p-2.5 bg-slate-950 rounded-lg border border-slate-800 font-mono text-[10px] text-emerald-400 overflow-x-auto max-h-48 overflow-y-auto">
-                <pre>{JSON.stringify(provincialPayload, null, 2)}</pre>
-              </div>
-            )}
+            <p className="text-slate-300">Data disimpan di server aplikasi. Pengiriman ke SIPKP Provinsi belum didukung backend.</p>
+            <button disabled className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-400">Sinkronkan Sekarang</button>
           </div>
 
           {/* Polarity & Target Card (If not Head) */}
@@ -305,15 +249,15 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
               <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-200 text-center">
                 <div>
                   <span className="text-[10px] text-slate-400">Target %</span>
-                  <p className="font-mono font-bold text-slate-800 text-sm mt-0.5">{target.targetPct}%</p>
+                  <p className="font-mono font-bold text-slate-800 text-sm mt-0.5">{target?.targetPct == null ? '-' : `${target.targetPct}%`}</p>
                 </div>
                 <div>
                   <span className="text-[10px] text-slate-400">Total Sasaran</span>
-                  <p className="font-mono font-bold text-slate-800 text-sm mt-0.5">{target.totalSasaran}</p>
+                  <p className="font-mono font-bold text-slate-800 text-sm mt-0.5">{target?.totalSasaran ?? '-'}</p>
                 </div>
                 <div>
                   <span className="text-[10px] text-slate-400">Target Fisik (Thn)</span>
-                  <p className="font-mono font-bold text-emerald-600 text-sm mt-0.5">{target.targetSasaran.toFixed(1)}</p>
+                  <p className="font-mono font-bold text-emerald-600 text-sm mt-0.5">{target?.targetSasaran?.toFixed(1) ?? '-'}</p>
                 </div>
               </div>
 
@@ -333,16 +277,16 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
           {/* PIC In Charge Info */}
           <div className="flex items-center justify-between p-3.5 bg-slate-50 rounded-xl border border-slate-200">
             <div className="flex items-center gap-3">
-              <div className={`w-9 h-9 rounded-full ${pic.avatarColor} text-white flex items-center justify-center font-bold text-xs`}>
-                {pic.name.charAt(0)}
+              <div className={`w-9 h-9 rounded-full ${pic?.avatarColor ?? 'bg-slate-300'} text-white flex items-center justify-center font-bold text-xs`}>
+                {pic?.name.charAt(0) ?? '-'}
               </div>
               <div>
-                <p className="font-bold text-slate-800">{pic.name}</p>
-                <p className="text-[11px] text-slate-500">{pic.role}</p>
+                <p className="font-bold text-slate-800">{pic?.name ?? 'Belum ditugaskan'}</p>
+                <p className="text-[11px] text-slate-500">{pic?.role ?? '-'}</p>
               </div>
             </div>
             <span className="text-[11px] font-mono text-emerald-600 font-semibold">
-              {pic.phone}
+              {pic?.phone ?? '-'}
             </span>
           </div>
 
@@ -366,6 +310,8 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
                   return (
                     <div 
                       key={child.id}
+                      role="button" tabIndex={0} aria-label={`Rincian indikator ${childCode}`}
+                      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectIndicator?.(child); } }}
                       onClick={() => onSelectIndicator && onSelectIndicator(child)}
                       className="p-2.5 hover:bg-slate-50 flex items-center justify-between gap-3 cursor-pointer transition-colors"
                     >
@@ -376,16 +322,16 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
                           </span>
                           <p className="font-semibold text-slate-800 truncate text-[11px]">{child.indikator}</p>
                         </div>
-                        <p className="text-[10px] text-slate-500 truncate mt-0.5">Realisasi: {childRec.pencapaianRiil} {child.satuan}</p>
+                        <p className="text-[10px] text-slate-500 truncate mt-0.5">Realisasi: {childRec.pencapaianRiil ?? '-'} {child.satuan}</p>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
-                        <ScoreBadge score={childRec.nilaiKinerja} size="sm" />
+                        {childRec.nilaiKinerja == null ? '-' : <ScoreBadge score={childRec.nilaiKinerja} size="sm" />}
                         <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
                           childRec.syncStatus === 'SYNCED'
                             ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                             : 'bg-amber-50 text-amber-800 border border-amber-200'
                         }`}>
-                          {childRec.syncStatus === 'SYNCED' ? 'Sinkron' : 'Draft'}
+                          {childRec.isMissing ? 'Belum diisi' : 'Data server'}
                         </span>
                       </div>
                     </div>
@@ -408,7 +354,7 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
                 {isHead && <Lock className="w-3.5 h-3.5 text-slate-500" />}
                 <span>Input Capaian Bulan {selectedMonth}</span>
               </span>
-              <ScoreBadge score={isHead ? (headAgg?.averageScore || 0) : rec.nilaiKinerja} size="sm" />
+              {(isHead ? headAgg?.averageScore : rec.nilaiKinerja) == null ? '-' : <ScoreBadge score={(isHead ? headAgg?.averageScore : rec.nilaiKinerja)!} size="sm" />}
             </div>
 
             {isHead ? (
@@ -426,6 +372,8 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
                       Realisasi Fisik ({indicator.satuan}):
                     </label>
                     <input
+                      aria-label="Realisasi fisik"
+                      disabled={!canEdit || pending}
                       type="number"
                       value={realisasiInput}
                       onChange={(e) => setRealisasiInput(e.target.value)}
@@ -437,7 +385,7 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
                       Target Sasaran Bulanan:
                     </label>
                     <div className="px-3 py-1.5 text-xs font-mono font-bold bg-slate-100 border border-slate-200 rounded-lg text-slate-700">
-                      {(target.targetSasaran / 12).toFixed(1)} {indicator.satuan}
+                      {target?.targetSasaran == null ? '-' : (target.targetSasaran / 12).toFixed(1)} {indicator.satuan}
                     </div>
                   </div>
                 </div>
@@ -447,6 +395,8 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
                     Catatan Lapangan / Kendala:
                   </label>
                   <textarea
+                    aria-label="Catatan lapangan"
+                    disabled={!canEdit || pending}
                     value={notesInput}
                     onChange={(e) => setNotesInput(e.target.value)}
                     placeholder="Catatan analisis kendala atau sumber data (misal ASIK / SMILE)..."
@@ -456,31 +406,29 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
 
                 {/* Evidence attachment simulation */}
                 <div className="flex items-center justify-between pt-1">
-                  <button
-                    type="button"
-                    onClick={() => setEvidenceUploaded(!evidenceUploaded)}
-                    className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded border transition-colors ${
-                      evidenceUploaded
-                        ? 'bg-emerald-100 border-emerald-300 text-emerald-800'
-                        : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50'
-                    }`}
-                  >
-                    <Paperclip className="w-3.5 h-3.5" />
-                    <span>{evidenceUploaded ? 'Bukti Dukung Terlampir' : 'Lampirkan Bukti (PDF/ASIK)'}</span>
-                  </button>
+                  <label className="min-w-0 text-slate-600">Lampirkan bukti dukung
+                    <input type="file" aria-label="Lampirkan bukti dukung" disabled={!canEdit || pending}
+                      onChange={e => { void handleUpload(e.target.files?.[0]); e.target.value = ''; }} className="block w-full text-xs" />
+                  </label>
 
                   <button
                     onClick={handleSave}
+                    disabled={!canEdit || pending}
                     className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors shadow-sm"
                   >
                     Simpan Capaian
                   </button>
                 </div>
+                {!canEdit && <p>Hanya Admin atau PIC yang ditugaskan dapat mengubah periode terbuka.</p>}
+                {evidenceId && <div className="space-y-2"><p>Bukti: {evidenceName || evidenceId}. Simpan capaian untuk menautkan bukti dan catatan.</p>
+                  <button disabled={pending} onClick={handleDownload} className="underline">Siapkan unduhan bukti</button>
+                  {downloadUrl && <a href={downloadUrl} target="_blank" rel="noreferrer" className="block underline">Unduh bukti dukung</a>}
+                </div>}
 
                 {savedSuccess && (
                   <p className="text-[11px] text-emerald-700 font-bold flex items-center gap-1">
                     <CheckCircle className="w-3.5 h-3.5" />
-                    <span>Data capaian bulan {selectedMonth} tersimpan lokal! (Klik Sinkronkan untuk mengirim ke Provinsi)</span>
+                    <span>Data capaian bulan {selectedMonth} tersimpan di server.</span>
                   </p>
                 )}
               </>
@@ -491,7 +439,7 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
           {!isHead && (
             <div className="space-y-2">
               <span className="font-bold text-slate-700 uppercase tracking-wider text-[11px]">
-                Tren Capaian 12 Bulan (Tahun 2026)
+                Tren Capaian 12 Bulan (Tahun {year})
               </span>
               <div className="grid grid-cols-6 gap-1 text-center font-mono text-[10px]">
                 {months.map((mName, idx) => {
@@ -509,7 +457,7 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
                       }`}
                     >
                       <span className="block text-[9px] text-slate-400 uppercase">{mName}</span>
-                      <span className="font-bold">{mRec.pencapaianRiil}</span>
+                      <span className="font-bold">{mRec.pencapaianRiil ?? '-'}</span>
                     </div>
                   );
                 })}

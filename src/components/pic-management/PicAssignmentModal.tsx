@@ -1,24 +1,32 @@
-import React, { useState } from 'react';
-import { pkpStore } from '../../services/mockState';
+import React, { useEffect, useState, useSyncExternalStore } from 'react';
+import { pkpStore } from '../../services/apiStore';
 import { 
   UserCheck, 
   Search, 
-  Layers, 
   Check, 
-  ShieldAlert, 
-  Sparkles,
-  Phone
+  Sparkles
 } from 'lucide-react';
 
 export const PicAssignmentView: React.FC = () => {
+  useSyncExternalStore(pkpStore.subscribe, pkpStore.getSnapshot, pkpStore.getServerSnapshot);
   const [search, setSearch] = useState('');
   const [selectedKlaster, setSelectedKlaster] = useState<number>(0);
-  const [bulkSection, setBulkSection] = useState<string>('1.1');
-  const [bulkPicId, setBulkPicId] = useState<string>('pic-1');
+  const [bulkSection, setBulkSection] = useState<string>('');
+  const [bulkPicId, setBulkPicId] = useState<string>('');
   const [notification, setNotification] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const user = pkpStore.getCurrentUser();
+  const canAssign = user.role === 'ADMIN_PUSKESMAS' || user.role === 'DINKES_ADMIN';
+  const disabled = pending || pkpStore.getLoadState().loading || !canAssign;
+  const centerId = pkpStore.getSelectedHealthCenterId();
+  const year = pkpStore.getCurrentYear();
+  useEffect(() => {
+    setBulkSection(''); setBulkPicId(''); setNotification(null); setError(null);
+  }, [centerId, year]);
 
   const indicators = pkpStore.getIndicators();
-  const pics = pkpStore.getPics();
+  const pics = pkpStore.getPicsByHealthCenter(pkpStore.getSelectedHealthCenterId() ?? undefined).filter(p => p.status === 'ACTIVE');
   const assignments = pkpStore.getAssignments();
 
   // Filter indicators
@@ -36,15 +44,26 @@ export const PicAssignmentView: React.FC = () => {
     return true;
   });
 
-  const handleAssignSingle = (indicatorId: string, picId: string) => {
-    pkpStore.assignPic(indicatorId, picId);
-    showNotification('PIC berhasil diperbarui untuk indikator terkait');
+  const handleAssignSingle = async (indicatorId: string, picId: string) => {
+    if (disabled || !pics.some(p => p.id === picId)) return;
+    setPending(true); setError(null); setNotification(null);
+    try {
+      await pkpStore.assignPic(indicatorId, picId);
+      showNotification('PIC berhasil diperbarui untuk indikator terkait');
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Penugasan gagal. Silakan coba lagi.');
+    } finally { setPending(false); }
   };
 
-  const handleBulkAssign = () => {
-    pkpStore.bulkAssignPic(bulkSection, bulkPicId);
-    const pic = pics.find(p => p.id === bulkPicId);
-    showNotification(`Seluruh indikator sub-klaster ${bulkSection} berhasil ditugaskan ke ${pic?.name}`);
+  const handleBulkAssign = async () => {
+    if (disabled || !bulkSection || !pics.some(p => p.id === bulkPicId)) return;
+    setPending(true); setError(null); setNotification(null);
+    try {
+      await pkpStore.bulkAssignPic(bulkSection, bulkPicId);
+      showNotification(`Indikator dengan kode bagian tepat ${bulkSection} berhasil ditugaskan.`);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Penugasan massal gagal. Silakan coba lagi.');
+    } finally { setPending(false); }
   };
 
   const showNotification = (msg: string) => {
@@ -57,6 +76,8 @@ export const PicAssignmentView: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {error && <p role="alert" className="p-3 bg-rose-50 text-rose-700 border border-rose-200 rounded-xl text-sm">{error}</p>}
+      <p className="text-xs text-slate-500">{pkpStore.getSelectedHealthCenter()?.name} / {pkpStore.getCurrentYear()}</p>
       {/* Header */}
       <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
@@ -81,24 +102,26 @@ export const PicAssignmentView: React.FC = () => {
       </div>
 
       {/* Bulk Assignment Quick Bar (Notion / Retool style) */}
-      <div className="bg-gradient-to-r from-emerald-50 to-teal-50 p-4 rounded-xl border border-emerald-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+      {canAssign && <div className="bg-gradient-to-r from-emerald-50 to-teal-50 p-4 rounded-xl border border-emerald-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center">
             <Sparkles className="w-4 h-4" />
           </div>
           <div>
             <h4 className="text-xs font-bold text-emerald-950">Fitur Penugasan Cepat (Bulk Assign per Sub-klaster)</h4>
-            <p className="text-[11px] text-emerald-700">Tugaskan sekaligus seluruh indikator dalam satu sub-kelompok program</p>
+            <p className="text-[11px] text-emerald-700">Hanya indikator dengan kode bagian persis sama; tidak termasuk bagian turunan.</p>
           </div>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs text-slate-600 font-medium">Sub-klaster:</span>
           <select
+            disabled={disabled}
             value={bulkSection}
             onChange={(e) => setBulkSection(e.target.value)}
             className="text-xs font-semibold bg-white border border-emerald-300 rounded-lg px-2.5 py-1.5 focus:ring-2 focus:ring-emerald-500"
           >
+            <option value="" disabled>Pilih bagian</option>
             {subSections.map(sec => (
               <option key={sec} value={sec}>Kode {sec}</option>
             ))}
@@ -106,23 +129,26 @@ export const PicAssignmentView: React.FC = () => {
 
           <span className="text-xs text-slate-600 font-medium">ke PIC:</span>
           <select
+            disabled={disabled}
             value={bulkPicId}
             onChange={(e) => setBulkPicId(e.target.value)}
             className="text-xs font-semibold bg-white border border-emerald-300 rounded-lg px-2.5 py-1.5 focus:ring-2 focus:ring-emerald-500"
           >
+            <option value="" disabled>Pilih PIC aktif</option>
             {pics.map(p => (
               <option key={p.id} value={p.id}>{p.name} ({p.role})</option>
             ))}
           </select>
 
           <button
+            disabled={disabled || !subSections.includes(bulkSection) || !pics.some(p => p.id === bulkPicId)}
             onClick={handleBulkAssign}
             className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors shadow-sm"
           >
             Terapkan Sekaligus
           </button>
         </div>
-      </div>
+      </div>}
 
       {/* Search & Filter */}
       <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -179,7 +205,7 @@ export const PicAssignmentView: React.FC = () => {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.map((ind) => {
-                const currentPicId = assignments[ind.id] || 'pic-1';
+                const currentPicId = assignments[ind.id] || '';
                 const officialCode = `${ind.sectionCode}.${ind.no.replace('.', '')}`;
 
                 return (
@@ -206,10 +232,13 @@ export const PicAssignmentView: React.FC = () => {
                     {/* PIC Dropdown */}
                     <td className="py-2 px-3 align-top">
                       <select
+                        disabled={disabled}
                         value={currentPicId}
                         onChange={(e) => handleAssignSingle(ind.id, e.target.value)}
                         className="w-full text-xs font-semibold bg-slate-50 hover:bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 focus:ring-2 focus:ring-emerald-500 cursor-pointer"
                       >
+                        <option value="" disabled>Belum ditugaskan</option>
+                        {currentPicId && !pics.some(p => p.id === currentPicId) && <option value={currentPicId} disabled>{pkpStore.getPicById(currentPicId)?.name ?? 'PIC tidak tersedia'} (nonaktif)</option>}
                         {pics.map(p => (
                           <option key={p.id} value={p.id}>
                             {p.name} — {p.role}

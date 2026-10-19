@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { pkpStore } from '../../services/mockState';
-import { OfficialIndicator, KlasterId, PeriodLockState } from '../../types/pkp';
+import React, { useState, useSyncExternalStore } from 'react';
+import { pkpStore } from '../../services/apiStore';
+import { ApiError } from '../../services/apiClient';
+import { OfficialIndicator, KlasterId, Sheet7OfficialSummary } from '../../types/pkp';
 import { 
   Search, 
   FileSpreadsheet, 
@@ -47,8 +48,11 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
   const [tempValue, setTempValue] = useState<string>('');
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
   const [toast, setToast] = useState<string | null>(null);
-  const [isSyncingAll, setIsSyncingAll] = useState(false);
-  const [syncingId, setSyncingId] = useState<string | null>(null);
+  const isSyncingAll = false;
+  const syncingId = null;
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useSyncExternalStore(pkpStore.subscribe, pkpStore.getSnapshot, pkpStore.getServerSnapshot);
 
   // Workflow modals
   const [showSubmitModal, setShowSubmitModal] = useState<boolean>(false);
@@ -61,29 +65,15 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
 
   const isQuarterMode = periodViewMode === 'QUARTERLY';
   const activePeriodNum = isQuarterMode ? selectedQuarter : selectedMonth;
-  const [lockState, setLockState] = useState<PeriodLockState>(
-    pkpStore.getPeriodLock(currentYear, activePeriodNum, isQuarterMode)
-  );
-
-  // Re-fetch lock state when period or mode changes
-  useEffect(() => {
-    setLockState(pkpStore.getPeriodLock(currentYear, activePeriodNum, isQuarterMode));
-  }, [currentYear, activePeriodNum, isQuarterMode]);
-
-  // Subscribe to changes in store
-  useEffect(() => {
-    const unsub = pkpStore.subscribe(() => {
-      setLockState(pkpStore.getPeriodLock(currentYear, activePeriodNum, isQuarterMode));
-    });
-    return () => unsub();
-  }, [currentYear, activePeriodNum, isQuarterMode]);
+  const lockState = pkpStore.getPeriodLock(currentYear, activePeriodNum, isQuarterMode);
 
   const indicators = pkpStore.getIndicators();
   const annualTargets = pkpStore.getAnnualTargets();
+  let quarterRows: Sheet7OfficialSummary['rows'] | undefined;
+  try { quarterRows = pkpStore.getOfficialSheet7Data(selectedQuarter).rows; } catch { /* Scope is loading. */ }
 
   const showToast = (msg: string) => {
     setToast(msg);
-    setTimeout(() => setToast(null), 3500);
   };
 
   const isArtifactRow = (ind: OfficialIndicator) => {
@@ -141,10 +131,13 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
     setCollapsedSections(prev => ({ ...prev, [sectionCode]: !prev[sectionCode] }));
   };
 
-  const isLocked = lockState.status === 'VERIFIED' || lockState.status === 'SUBMITTED';
+  const isLocked = pkpStore.isPeriodLocked(currentYear, activePeriodNum, isQuarterMode);
+  const canEdit = (id: string) => !pkpStore.getLoadState().loading && !isQuarterMode && !pkpStore.isPeriodLocked(currentYear, selectedMonth) &&
+    (currentUser.role === 'ADMIN_PUSKESMAS' || (currentUser.role === 'PIC' && pkpStore.getAssignments()[id] === currentUser.id));
 
   // Realisasi Edit Handlers
-  const handleStartEdit = (ind: OfficialIndicator, currentVal: number) => {
+  const handleStartEdit = (ind: OfficialIndicator, currentVal: number | null) => {
+    if (pending || editingId === ind.id || !canEdit(ind.id)) return;
     if (isLocked) {
       showToast(`Periode ${isQuarterMode ? `Triwulan ${selectedQuarter}` : `Bulan ke-${selectedMonth}`} sedang TERKUNCI (${lockState.status}). Data tidak dapat diubah.`);
       return;
@@ -154,13 +147,17 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
       return;
     }
     setEditingId(ind.id);
-    setTempValue(currentVal.toString());
+    setTempValue(currentVal?.toString() ?? '');
   };
 
-  const handleCommitEdit = (ind: OfficialIndicator) => {
-    const val = parseFloat(tempValue) || 0;
-    pkpStore.updateMonthlyInput(ind.id, selectedMonth, val);
-    setEditingId(null);
+  const handleCommitEdit = async (ind: OfficialIndicator) => {
+    if (pending || !canEdit(ind.id)) return;
+    const val = Number(tempValue);
+    if (!tempValue.trim() || !Number.isFinite(val) || val < 0) { setError('Realisasi harus berupa angka valid nonnegatif.'); return; }
+    setPending(true); setError(null);
+    try { await pkpStore.updateMonthlyInput(ind.id, selectedMonth, val); setEditingId(null); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Penyimpanan gagal.'); }
+    finally { setPending(false); }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent, ind: OfficialIndicator) => {
@@ -197,46 +194,48 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
     onOpenDrawer(headIndicator);
   };
 
-  const handleSyncSingle = (indId: string, officialCode: string) => {
-    setSyncingId(indId);
-    setTimeout(() => {
-      pkpStore.syncElementToProvinsi(indId, selectedMonth);
-      setSyncingId(null);
-      showToast(`Elemen [${officialCode}] berhasil disinkronkan ke server SIPKP Provinsi!`);
-    }, 400);
-  };
-
-  const handleSyncAll = () => {
-    setIsSyncingAll(true);
-    setTimeout(() => {
-      const res = pkpStore.syncAllMonthElementsToProvinsi(selectedMonth);
-      setIsSyncingAll(false);
-      showToast(`Seluruh ${res.syncedCount} elemen penilaian bulan ${selectedMonth} berhasil disinkronkan ke server SIPKP Provinsi!`);
-    }, 600);
-  };
+  const handleSyncSingle = (_id: string, _code: string) => setError('Integrasi SIPKP Provinsi belum tersedia.');
+  const handleSyncAll = () => setError('Integrasi SIPKP Provinsi belum tersedia.');
 
   // Workflow Handlers
-  const handleSubmitToDinkes = () => {
-    pkpStore.submitPeriod(currentYear, activePeriodNum, isQuarterMode, currentUser.name);
+  const runWorkflow = async (action: (cascade: boolean) => Promise<unknown>) => {
+    if (pending) return;
+    setPending(true); setError(null);
+    try {
+      try { await action(false); }
+      catch (e) {
+        if (!(e instanceof ApiError) || e.status !== 409 || !e.dependencies || !window.confirm(`${e.message}\n${JSON.stringify(e.dependencies)}\nBuka juga seluruh periode terkait?`)) throw e;
+        await action(true);
+      }
+      return true;
+    } catch (e) { setError(e instanceof Error ? e.message : 'Operasi gagal.'); return false; }
+    finally { setPending(false); }
+  };
+  const handleSubmitToDinkes = async () => {
+    if (currentUser.role !== 'ADMIN_PUSKESMAS' || isLocked) return;
+    if (!await runWorkflow(() => pkpStore.submitPeriod(currentYear, activePeriodNum, isQuarterMode))) return;
     setShowSubmitModal(false);
     showToast(`Laporan ${isQuarterMode ? `Triwulan ${selectedQuarter}` : `Bulan ke-${selectedMonth}`} diajukan ke Dinkes & dikunci.`);
   };
 
-  const handleVerifyByDinkes = () => {
-    pkpStore.verifyAndLockPeriod(currentYear, activePeriodNum, isQuarterMode, `${currentUser.name} (Dinkes)`);
+  const handleVerifyByDinkes = async () => {
+    if (!isDinkes || !await runWorkflow(() => pkpStore.verifyAndLockPeriod(currentYear, activePeriodNum, isQuarterMode))) return;
     showToast(`Laporan ${isQuarterMode ? `Triwulan ${selectedQuarter}` : `Bulan ke-${selectedMonth}`} DIVERIFIKASI & DIKUNCI secara resmi.`);
   };
 
-  const handleRequestRevision = () => {
+  const handleRequestRevision = async () => {
     if (!revisionNoteInput.trim()) return;
-    pkpStore.requestRevisionPeriod(currentYear, activePeriodNum, isQuarterMode, `${currentUser.name} (Dinkes)`, revisionNoteInput);
+    if (!isDinkes || !await runWorkflow(cascade => pkpStore.requestRevisionPeriod(currentYear, activePeriodNum, isQuarterMode, revisionNoteInput.trim(), undefined, cascade))) return;
     setShowRevisionModal(false);
     setRevisionNoteInput('');
     showToast('Catatan revisi telah dikirimkan ke Puskesmas.');
   };
 
-  const handleUnlockForEdit = () => {
-    pkpStore.unlockPeriodForEdit(currentYear, activePeriodNum, isQuarterMode, currentUser.name);
+  const handleUnlockForEdit = async () => {
+    if (!isDinkes || pending) return;
+    const reason = window.prompt('Alasan membuka kunci revisi (wajib):');
+    if (!reason?.trim()) return;
+    if (!await runWorkflow(cascade => pkpStore.unlockPeriodForEdit(currentYear, activePeriodNum, isQuarterMode, undefined, reason.trim(), cascade))) return;
     showToast(`Kunci data ${isQuarterMode ? `Triwulan ${selectedQuarter}` : `Bulan ke-${selectedMonth}`} telah dibuka.`);
   };
 
@@ -244,6 +243,8 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
 
   return (
     <div className="space-y-4">
+      {error && <p role="alert" className="p-3 bg-rose-50 text-rose-800 rounded-xl">{error}</p>}
+      {pending && <p role="status">Menyimpan ke server...</p>}
       {/* Toast Notification */}
       {toast && (
         <div className="fixed bottom-6 right-6 z-50 bg-slate-900 text-white px-4 py-3 rounded-xl shadow-2xl border border-slate-700 flex items-center gap-2.5 text-xs animate-slide-in">
@@ -269,7 +270,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
             </div>
             <p className="text-xs text-slate-500">
               {isQuarterMode 
-                ? 'Mode Triwulanan: Akumulasi progres kumulatif target & capaian terhadap target triwulan berjalan.'
+                ? 'Mode Triwulanan: Kumulatif YTD dari Januari sampai akhir triwulan, bukan triwulan mandiri.'
                 : 'Mode Bulanan: Input numerator per bulan berjalan oleh masing-masing PIC Program.'}
             </p>
           </div>
@@ -347,6 +348,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
           {isDinkes && (
             <button
               onClick={handleUnlockForEdit}
+              disabled={pending}
               className="px-3 py-1.5 rounded-lg bg-white border border-emerald-300 hover:bg-emerald-100 text-emerald-800 text-xs font-bold flex items-center gap-1.5 transition-all self-start md:self-auto"
             >
               <Unlock className="w-3.5 h-3.5 text-emerald-700" />
@@ -387,6 +389,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
               </button>
               <button
                 onClick={handleVerifyByDinkes}
+                disabled={pending}
                 className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs"
               >
                 <CheckCircle2 className="w-3.5 h-3.5" />
@@ -422,7 +425,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
             </div>
           </div>
 
-          {!isDinkes && (
+          {currentUser.role === 'ADMIN_PUSKESMAS' && !isLocked && (
             <button
               onClick={() => setShowSubmitModal(true)}
               className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all self-start md:self-auto"
@@ -434,7 +437,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
         </div>
       )}
 
-      {lockState.status === 'DRAFT' && !isDinkes && (
+      {lockState.status === 'DRAFT' && currentUser.role === 'ADMIN_PUSKESMAS' && !isLocked && (
         <div className="p-3.5 rounded-xl bg-slate-100 border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-slate-800">
           <div className="flex items-center gap-2 text-xs text-slate-600">
             <Lock className="w-4 h-4 text-slate-400" />
@@ -469,7 +472,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
               </span>
             </div>
             <p className="text-xs text-slate-300">
-              {syncedCountAll} dari {validIndicators.length} elemen ({syncCoveragePct}%) telah tersinkronisasi per kode resmi Kemenkes.
+              Integrasi SIPKP Provinsi belum tersedia. Tidak ada pengiriman dari layar ini.
             </p>
           </div>
         </div>
@@ -477,7 +480,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
         <div className="flex items-center gap-3">
           <div className="hidden sm:block w-36 text-right">
             <div className="text-[10px] text-slate-300 font-mono mb-1 font-bold">
-              {syncCoveragePct}% Terkirim
+              Integrasi belum tersedia
             </div>
             <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
               <div 
@@ -489,7 +492,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
 
           <button
             onClick={handleSyncAll}
-            disabled={isSyncingAll}
+            disabled
             className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 disabled:bg-emerald-800 text-white text-xs font-bold transition-all shadow-md active:scale-98"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isSyncingAll ? 'animate-spin' : ''}`} />
@@ -553,7 +556,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
             </span>
             <span className="hidden md:inline">•</span>
             <span className="hidden md:inline text-emerald-700 font-medium">
-              {isQuarterMode ? 'Akumulasi Progres Triwulan' : 'Child Elemen: Input Numerator Realisasi'}
+              {isQuarterMode ? 'Kumulatif YTD Januari - Akhir Triwulan' : 'Child Elemen: Input Numerator Realisasi'}
             </span>
           </div>
         </div>
@@ -573,7 +576,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
                   {isQuarterMode ? 'Target Sas. TW' : 'Tgt. Sasaran'}
                 </th>
                 <th className="py-2.5 px-3 w-32 text-right border-r border-slate-200 bg-emerald-50 text-emerald-950 font-black">
-                  {isQuarterMode ? 'Kumulatif TW' : 'Realisasi Bln'}
+                  {isQuarterMode ? 'Kumulatif YTD' : 'Realisasi Bln'}
                 </th>
                 <th className="py-2.5 px-2.5 w-24 text-right border-r border-slate-200">Capaian Riil</th>
                 <th className="py-2.5 px-2.5 w-28 text-center border-r border-slate-200">Nilai Kinerja</th>
@@ -585,27 +588,9 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
               {groupedSections.map((sec) => {
                 const isCollapsed = collapsedSections[sec.sectionCode];
 
-                // Compute Head Aggregation for active period
-                let aggAverageScore = 0;
-                let aggAverageCapaian = 0;
-                let aggSyncedCount = 0;
-
-                sec.items.forEach(ind => {
-                  const rec = isQuarterMode
-                    ? pkpStore.getQuarterlyRecord(ind.id, selectedQuarter)
-                    : pkpStore.getMonthlyRecord(ind.id, selectedMonth);
-                  aggAverageScore += rec.nilaiKinerja;
-                  aggAverageCapaian += rec.capaianRiilPct;
-                  if (rec.syncStatus === 'SYNCED') aggSyncedCount++;
-                });
-
-                const childCount = sec.items.length || 1;
-                const agg = {
-                  averageScore: Number((aggAverageScore / childCount).toFixed(2)),
-                  averageCapaian: Number((aggAverageCapaian / childCount).toFixed(2)),
-                  syncedCount: aggSyncedCount,
-                  childCount: sec.items.length
-                };
+                const monthlyAgg = pkpStore.getSubKlasterAggregation(sec.sectionCode, selectedMonth);
+                const quarterRow = isQuarterMode ? quarterRows?.find(row => row.no === sec.sectionCode && !row.isKlasterHead) : undefined;
+                const agg = { ...monthlyAgg, averageScore: isQuarterMode ? quarterRow?.nilaiKelompok ?? null : monthlyAgg.averageScore };
 
                 return (
                   <React.Fragment key={`group-${sec.sectionCode}`}>
@@ -623,6 +608,8 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
 
                       <td className="py-2.5 px-3 align-middle">
                         <div 
+                          role="button" tabIndex={0} aria-label={`Rincian head ${sec.sectionCode}`}
+                          onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleOpenHeadDrawer(sec); } }}
                           onClick={() => handleOpenHeadDrawer(sec)}
                           className="cursor-pointer group/head"
                           title="Klik untuk membuka rincian agregasi Head Penilaian"
@@ -658,11 +645,11 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
                       </td>
 
                       <td className="py-2.5 px-3 text-right font-mono text-slate-800 align-middle font-bold">
-                        {agg.averageCapaian}%
+                         {agg.averageCapaian == null ? '-' : `${agg.averageCapaian}%`}
                       </td>
 
                       <td className="py-2.5 px-3 text-center align-middle">
-                        <ScoreBadge score={agg.averageScore} size="sm" />
+                         {agg.averageScore == null ? '-' : <ScoreBadge score={agg.averageScore} size="sm" />}
                       </td>
 
                       <td className="py-2.5 px-3 align-middle text-[11px] text-slate-600">
@@ -676,7 +663,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
                             : 'bg-amber-50 text-amber-800 border-amber-300'
                         }`}>
                           <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                          <span>{agg.syncedCount}/{agg.childCount} Sinkron</span>
+                           <span>Integrasi belum tersedia</span>
                         </span>
                       </td>
                     </tr>
@@ -687,17 +674,14 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
                         ? pkpStore.getQuarterlyRecord(ind.id, selectedQuarter)
                         : pkpStore.getMonthlyRecord(ind.id, selectedMonth);
 
-                      const target = annualTargets[ind.id] || {
-                        totalSasaran: ind.totalSasaranDefault,
-                        targetSasaran: ind.targetSasaranDefault
-                      };
+                      const target = annualTargets[ind.id];
 
                       const fraction = isQuarterMode ? selectedQuarter / 4 : 1 / 12;
-                      const periodTotalSasaran = target.totalSasaran * fraction;
-                      const periodTargetSasaran = target.targetSasaran * fraction;
+                      const periodTotalSasaran = target?.totalSasaran == null ? null : target.totalSasaran * fraction;
+                      const periodTargetSasaran = target?.targetSasaran == null ? null : target.targetSasaran * fraction;
 
                       const pic = pkpStore.getPicForIndicator(ind.id);
-                      const isEditing = editingId === ind.id && !isLocked && !isQuarterMode;
+                      const isEditing = editingId === ind.id && canEdit(ind.id);
                       const officialCode = `${ind.sectionCode}.${ind.no.replace('.', '')}`;
                       const isElementSyncing = syncingId === ind.id;
 
@@ -714,6 +698,8 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
                           {/* Kegiatan & Indikator */}
                           <td className="py-2 px-3 align-middle border-r border-slate-200">
                             <div 
+                              role="button" tabIndex={0} aria-label={`Rincian indikator ${officialCode}`}
+                              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenDrawer(ind); } }}
                               onClick={() => onOpenDrawer(ind)}
                               className="cursor-pointer"
                               title="Klik untuk membuka drawer rincian & bukti dukung"
@@ -740,19 +726,22 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
 
                           {/* Total Sasaran */}
                           <td className="py-2 px-2.5 text-right align-middle border-r border-slate-200 font-mono text-slate-600">
-                            {periodTotalSasaran.toFixed(1)}
+                            {periodTotalSasaran?.toFixed(1) ?? '-'}
                           </td>
 
                           {/* Target Sasaran */}
                           <td className="py-2 px-2.5 text-right align-middle border-r border-slate-200 font-mono text-slate-900 font-semibold">
-                            {periodTargetSasaran.toFixed(1)}
+                            {periodTargetSasaran?.toFixed(1) ?? '-'}
                           </td>
 
                           {/* REALISASI CELL */}
                           <td 
+                            role="button" tabIndex={canEdit(ind.id) ? 0 : -1} aria-disabled={!canEdit(ind.id) || pending}
+                            aria-label={`Edit realisasi ${officialCode}`}
+                            onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); handleStartEdit(ind, rec.pencapaianRiil); } }}
                             onClick={() => handleStartEdit(ind, rec.pencapaianRiil)}
                             className={`py-2 px-3 text-right align-middle border-r border-slate-200 transition-colors ${
-                              isLocked 
+                              !canEdit(ind.id)
                                 ? 'bg-slate-100/80 cursor-not-allowed' 
                                 : isQuarterMode 
                                 ? 'bg-sky-50/50 cursor-pointer' 
@@ -769,6 +758,8 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
                             {isEditing ? (
                               <div className="flex items-center justify-end gap-1">
                                 <input
+                                  aria-label={`Realisasi ${officialCode}`}
+                                  disabled={pending}
                                   type="number"
                                   value={tempValue}
                                   onChange={(e) => setTempValue(e.target.value)}
@@ -777,6 +768,8 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
                                   autoFocus
                                 />
                                 <button
+                                  aria-label={`Simpan realisasi ${officialCode}`}
+                                  disabled={pending}
                                   onClick={() => handleCommitEdit(ind)}
                                   className="p-1 bg-emerald-600 text-white rounded hover:bg-emerald-700"
                                   title="Simpan"
@@ -788,7 +781,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
                               <div className="flex items-center justify-end gap-1">
                                 {isLocked && <Lock className="w-3 h-3 text-slate-400" />}
                                 <span className="font-mono font-bold text-slate-900 group-hover:text-emerald-700">
-                                  {rec.pencapaianRiil}
+                                  {rec.pencapaianRiil ?? '-'}{(rec as typeof rec & { isMissing?: boolean }).isMissing ? ' (Belum diisi)' : ''}
                                 </span>
                                 <span className="text-[10px] text-slate-400 font-sans ml-1 font-normal">
                                   {ind.satuan}
@@ -799,20 +792,20 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
 
                           {/* Capaian Riil % */}
                           <td className="py-2 px-2.5 text-right font-mono text-slate-700 align-middle text-[11px]">
-                            {rec.capaianRiilPct}%
+                            {rec.capaianRiilPct == null ? '-' : `${rec.capaianRiilPct}%`}
                           </td>
 
                           {/* Nilai Kinerja */}
                           <td className="py-2 px-2.5 text-center align-middle border-r border-slate-200">
-                            <ScoreBadge score={rec.nilaiKinerja} size="sm" />
+                            {rec.nilaiKinerja == null ? '-' : <ScoreBadge score={rec.nilaiKinerja} size="sm" />}
                           </td>
 
                           {/* PIC Pengelola */}
                           <td className="py-2 px-3 align-middle border-r border-slate-200">
                             <div className="flex items-center gap-1.5">
-                              <span className={`w-2 h-2 rounded-full ${pic.avatarColor}`} />
-                              <span className="text-slate-700 font-medium truncate max-w-[100px] text-[11px]" title={`${pic.name} (${pic.role})`}>
-                                {pic.name.split(',')[0]}
+                              <span className={`w-2 h-2 rounded-full ${pic?.avatarColor ?? 'bg-slate-300'}`} />
+                              <span className="text-slate-700 font-medium truncate max-w-[100px] text-[11px]" title={pic?.name}>
+                                {pic?.name.split(',')[0] ?? 'Belum ditugaskan'}
                               </span>
                             </div>
                           </td>
@@ -827,12 +820,12 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
                             ) : (
                               <button
                                 onClick={() => handleSyncSingle(ind.id, officialCode)}
-                                disabled={isElementSyncing}
+                                disabled
                                 className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-bold transition-all shadow-2xs hover:scale-102"
                                 title="Klik untuk sinkronkan elemen ini ke server provinsi"
                               >
                                 <RefreshCw className={`w-3 h-3 text-amber-600 ${isElementSyncing ? 'animate-spin' : ''}`} />
-                                <span>{isElementSyncing ? 'Mengirim...' : 'Belum Sinkron'}</span>
+                                <span>Integrasi belum tersedia</span>
                               </button>
                             )}
                           </td>
@@ -850,7 +843,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
       {/* ===================== SUBMISSION MODAL ===================== */}
       {showSubmitModal && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200">
+          <div role="dialog" aria-modal="true" aria-label="Ajukan laporan ke Dinkes" className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200">
             <div className="w-12 h-12 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center mb-4">
               <Send className="w-6 h-6" />
             </div>
@@ -870,6 +863,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
               </button>
               <button
                 onClick={handleSubmitToDinkes}
+                disabled={pending || isLocked || currentUser.role !== 'ADMIN_PUSKESMAS'}
                 className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm transition-all"
               >
                 Ya, Ajukan & Kunci Data
@@ -882,7 +876,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
       {/* ===================== REVISION MODAL (DINKES) ===================== */}
       {showRevisionModal && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200">
+          <div role="dialog" aria-modal="true" aria-label="Kembalikan untuk revisi" className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200">
             <div className="w-12 h-12 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center mb-4">
               <AlertTriangle className="w-6 h-6" />
             </div>
@@ -895,6 +889,8 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
 
             <div className="mt-4">
               <textarea
+                aria-label="Catatan revisi"
+                disabled={pending}
                 value={revisionNoteInput}
                 onChange={(e) => setRevisionNoteInput(e.target.value)}
                 placeholder="Tuliskan catatan perbaikan..."
@@ -912,7 +908,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
               </button>
               <button
                 onClick={handleRequestRevision}
-                disabled={!revisionNoteInput.trim()}
+                disabled={pending || !revisionNoteInput.trim()}
                 className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-bold shadow-sm"
               >
                 Kirim Catatan Revisi

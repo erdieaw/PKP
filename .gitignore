@@ -8,7 +8,11 @@ pnpm-debug.log*
 lerna-debug.log*
 
 # Diagnostic Screenshots & Scratch test scripts
+.playwright-mcp/
+playwright-report/
+test-results/
 *.png
+!/bg.png
 scratch_*.mjs
 test-pw*.mjs
 

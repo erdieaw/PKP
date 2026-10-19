@@ -1,23 +1,18 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { pkpStore } from '../../services/mockState';
+import React, { useState, useSyncExternalStore, useMemo } from 'react';
+import { pkpStore } from '../../services/apiStore';
 import { AnnualTrendData, AnnualIndicatorTrend, OfficialIndicator } from '../../types/pkp';
 import { 
   CalendarRange, 
   TrendingUp, 
-  TrendingDown,
   Award, 
   Filter, 
   Search, 
-  Download, 
   Printer, 
   ChevronRight, 
   ChevronDown,
   Layers,
-  Sparkles,
   BarChart3,
   Calendar,
-  CheckCircle2,
-  AlertTriangle,
   ArrowUpRight,
   ArrowDownRight,
   FileSpreadsheet
@@ -28,11 +23,31 @@ interface AnnualTrendDashboardProps {
   onOpenDrawer?: (indicator: OfficialIndicator) => void;
 }
 
+const hasNumber = (value: number | null | undefined): value is number => typeof value === 'number' && Number.isFinite(value);
+const formatNumber = (value: number | null | undefined, suffix = '', digits = 1) => hasNumber(value) ? `${value.toFixed(digits)}${suffix}` : '-';
+const months = (values: readonly (number | null)[] | undefined) => Array.from({ length: 12 }, (_, index) => hasNumber(values?.[index]) ? values![index] : null);
+type NullableTrendRow<T extends { monthlyScores: number[]; annualAverage: number; category: string }> = Omit<T, 'monthlyScores' | 'annualAverage' | 'category'> & { monthlyScores: (number | null)[]; annualAverage: number | null; category: string | null };
+type TrendView = Omit<AnnualTrendData, 'monthlyOverallScores' | 'annualAveragePKP' | 'annualCategoryPKP' | 'highestMonth' | 'lowestMonth' | 'klasters' | 'subKlasters'> & {
+  monthlyOverallScores: (number | null)[];
+  annualAveragePKP: number | null;
+  annualCategoryPKP: string | null;
+  highestMonth: { name: string; score: number | null } | null;
+  lowestMonth: { name: string; score: number | null } | null;
+  klasters: NullableTrendRow<AnnualTrendData['klasters'][number]>[];
+  subKlasters: NullableTrendRow<AnnualTrendData['subKlasters'][number]>[];
+};
+type IndicatorView = Omit<AnnualIndicatorTrend, 'monthlyValues' | 'monthlyPct' | 'monthlyScores' | 'annualAverageScore' | 'annualAveragePct' | 'category'> & {
+  monthlyValues: (number | null)[]; monthlyPct: (number | null)[]; monthlyScores: (number | null)[];
+  annualAverageScore: number | null; annualAveragePct: number | null; category: string | null;
+};
+
 export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
   onNavigateToMonth,
   onOpenDrawer
 }) => {
+  useSyncExternalStore(pkpStore.subscribe, pkpStore.getSnapshot, pkpStore.getServerSnapshot);
   const currentYear = pkpStore.getCurrentYear();
+  const load = pkpStore.getLoadState();
   const [selectedKlaster, setSelectedKlaster] = useState<number>(0); // 0 = Semua
   const [viewMode, setViewMode] = useState<'KLASTER' | 'INDICATOR'>('KLASTER');
   const [metricType, setMetricType] = useState<'SCORE' | 'PERCENT' | 'NUMERATOR'>('SCORE');
@@ -45,23 +60,12 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
     5: true
   });
 
-  const [trendData, setTrendData] = useState<AnnualTrendData>(() => 
-    pkpStore.getAnnualTrendData(currentYear)
-  );
-
-  const [indicatorsTrend, setIndicatorsTrend] = useState<AnnualIndicatorTrend[]>(() =>
-    pkpStore.getAnnualIndicatorsTrend(selectedKlaster, currentYear)
-  );
-
-  // Subscribe to changes
-  useEffect(() => {
-    const refresh = () => {
-      setTrendData(pkpStore.getAnnualTrendData(currentYear));
-      setIndicatorsTrend(pkpStore.getAnnualIndicatorsTrend(selectedKlaster, currentYear));
-    };
-    const unsub = pkpStore.subscribe(refresh);
-    return () => unsub();
-  }, [currentYear, selectedKlaster]);
+  let trendData: TrendView | undefined;
+  try {
+    const raw = pkpStore.getAnnualTrendData(currentYear) as unknown as TrendView;
+    trendData = { ...raw, monthlyOverallScores: months(raw.monthlyOverallScores), klasters: raw.klasters.map(k => ({ ...k, monthlyScores: months(k.monthlyScores) })), subKlasters: raw.subKlasters.map(s => ({ ...s, monthlyScores: months(s.monthlyScores) })) };
+  } catch { /* Scope analytics are unavailable while loading. */ }
+  const indicatorsTrend = pkpStore.getAnnualIndicatorsTrend(selectedKlaster, currentYear) as unknown as IndicatorView[];
 
   const monthShorts = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
   const monthFullNames = [
@@ -70,8 +74,8 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
   ];
 
   // Helper for color badge
-  const getCellBadgeClass = (score: number) => {
-    if (score === 0) return 'bg-slate-100 text-slate-400 border-slate-200';
+  const getCellBadgeClass = (score: number | null | undefined) => {
+    if (!hasNumber(score)) return 'bg-slate-100 text-slate-400 border-slate-200';
     if (score >= 91) return 'bg-emerald-50 text-emerald-700 border-emerald-200 font-bold';
     if (score >= 81) return 'bg-amber-50 text-amber-700 border-amber-200 font-bold';
     return 'bg-rose-50 text-rose-700 border-rose-200 font-bold';
@@ -97,13 +101,14 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
 
   // Export CSV
   const handleExportCSV = () => {
+    if (!trendData) return;
     let csv = '';
     if (viewMode === 'KLASTER') {
       csv = 'No / Kode,Nama Klaster / Sub-klaster,Jan,Feb,Mar (TW1),Apr,Mei,Jun (TW2),Jul,Agu,Sep (TW3),Okt,Nov,Des (TW4),Rerata Tahunan,Kategori\n';
       trendData.klasters.forEach(k => {
-        csv += `"${k.klasterId}.0","${k.name}",${k.monthlyScores.join(',')},"${k.annualAverage}","${k.category}"\n`;
+        csv += `"${k.klasterId}.0","${k.name.replace(/"/g, '""')}",${k.monthlyScores.map(v => formatNumber(v)).join(',')},"${formatNumber(k.annualAverage)}","${k.category ?? 'Belum dinilai'}"\n`;
         trendData.subKlasters.filter(s => s.klasterId === k.klasterId).forEach(s => {
-          csv += `"${s.code}","${s.name}",${s.monthlyScores.join(',')},"${s.annualAverage}","${s.category}"\n`;
+          csv += `"${s.code}","${s.name.replace(/"/g, '""')}",${s.monthlyScores.map(v => formatNumber(v)).join(',')},"${formatNumber(s.annualAverage)}","${s.category ?? 'Belum dinilai'}"\n`;
         });
       });
     } else {
@@ -114,7 +119,7 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
           : metricType === 'PERCENT' 
           ? item.monthlyPct 
           : item.monthlyValues;
-        csv += `"${item.indicator.no}","${item.indicator.indikator.replace(/"/g, '""')}","${item.indicator.satuan}","${item.indicator.targetSasaranDefault}",${scores.join(',')},"${item.annualAverageScore}","${item.category}"\n`;
+        csv += `"${item.indicator.no}","${item.indicator.indikator.replace(/"/g, '""')}","${item.indicator.satuan}","${pkpStore.getAnnualTargets()[item.indicator.id]?.targetSasaran ?? '-'}",${months(scores).map(v => hasNumber(v) ? String(v) : '-').join(',')},"${metricType === 'NUMERATOR' ? '-' : formatNumber(metricType === 'PERCENT' ? item.annualAveragePct : item.annualAverageScore)}","${item.category ?? 'Belum dinilai'}"\n`;
       });
     }
 
@@ -126,11 +131,14 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const toggleKlaster = (id: number) => {
     setExpandedKlasters(prev => ({ ...prev, [id]: !prev[id] }));
   };
+
+  if (load.loading || load.error || !trendData) return <div className="bg-white p-6 rounded-xl border border-slate-200 text-slate-600" role={load.error ? 'alert' : 'status'}>{load.error?.message ?? (load.loading ? 'Memuat tren tahunan...' : 'Tren tahunan belum tersedia untuk periode ini.')}</div>;
 
   return (
     <div className="space-y-6">
@@ -150,7 +158,7 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
               Dashboard Kinerja Tahunan (12 Bulan)
             </h2>
             <p className="text-slate-300 text-xs max-w-2xl leading-relaxed">
-              Pemantauan komparasi longitudinal performa mutu fasilitas kesehatan dari Januari hingga Desember (Tahun Anggaran {currentYear}). Menampilkan agregasi 5 Klaster, 29 Sub-klaster, dan 272 Indikator Baku secara terintegrasi.
+              Pemantauan kinerja Januari hingga Desember (Tahun Anggaran {currentYear}). Menampilkan {trendData.klasters.length} Klaster dan {trendData.subKlasters.length} Sub-klaster dari analitik server. Nilai yang belum tersedia ditampilkan sebagai tanda -.
             </p>
           </div>
 
@@ -158,13 +166,13 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
             <div className="text-right">
               <p className="text-[11px] text-slate-400 font-medium">Rerata Tahunan (YTD)</p>
               <div className="text-3xl sm:text-4xl font-black font-mono text-emerald-400">
-                {trendData.annualAveragePKP}%
+                {formatNumber(trendData.annualAveragePKP, '%')}
               </div>
               <p className={`text-xs font-bold mt-0.5 ${
-                trendData.annualCategoryPKP === 'Kinerja Baik' ? 'text-emerald-400' : 
+                !hasNumber(trendData.annualAveragePKP) ? 'text-slate-400' : trendData.annualCategoryPKP === 'Kinerja Baik' ? 'text-emerald-400' :
                 trendData.annualCategoryPKP === 'Kinerja Cukup' ? 'text-amber-400' : 'text-rose-400'
               }`}>
-                {trendData.annualCategoryPKP}
+                {hasNumber(trendData.annualAveragePKP) ? trendData.annualCategoryPKP ?? 'Belum dinilai' : 'Belum dinilai'}
               </p>
             </div>
             <div className="h-12 w-px bg-obsidian-700" />
@@ -193,13 +201,13 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
           </div>
           <div className="mt-2">
             <span className="text-2xl font-black text-slate-900 font-mono">
-              {trendData.highestMonth.score}%
+              {formatNumber(trendData.highestMonth?.score, '%')}
             </span>
             <span className="ml-2 text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-              {trendData.highestMonth.name}
+              {hasNumber(trendData.highestMonth?.score) ? trendData.highestMonth?.name : '-'}
             </span>
           </div>
-          <p className="mt-2 text-xs text-slate-500">Capaian kinerja puncak se-kabupaten</p>
+          <p className="mt-2 text-xs text-slate-500">Capaian tertinggi Puskesmas terpilih</p>
         </div>
 
         {/* Card 2: Titik Terendah */}
@@ -212,13 +220,13 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
           </div>
           <div className="mt-2">
             <span className="text-2xl font-black text-slate-900 font-mono">
-              {trendData.lowestMonth.score}%
+              {formatNumber(trendData.lowestMonth?.score, '%')}
             </span>
             <span className="ml-2 text-xs font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-md border border-rose-200">
-              {trendData.lowestMonth.name}
+              {hasNumber(trendData.lowestMonth?.score) ? trendData.lowestMonth?.name : '-'}
             </span>
           </div>
-          <p className="mt-2 text-xs text-slate-500">Bulan baseline awal sebelum akselerasi</p>
+          <p className="mt-2 text-xs text-slate-500">Capaian terendah dari bulan yang dinilai</p>
         </div>
 
         {/* Card 3: Milestone Triwulan I */}
@@ -231,13 +239,13 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
           </div>
           <div className="mt-2">
             <span className="text-2xl font-black text-slate-900 font-mono">
-              {trendData.monthlyOverallScores[2] || 0}%
+              {formatNumber(trendData.monthlyOverallScores[2], '%')}
             </span>
             <span className="ml-2 text-xs font-bold text-teal-700 bg-teal-50 px-2 py-0.5 rounded-md border border-teal-200">
-              Terkunci Dinkes
+              {pkpStore.getPeriodLock(currentYear, 1, true).status}
             </span>
           </div>
-          <p className="mt-2 text-xs text-slate-500">Tersinkron 100% ke server Provinsi</p>
+          <p className="mt-2 text-xs text-slate-500">Status evaluasi triwulan dari server</p>
         </div>
 
         {/* Card 4: Kepatuhan Entri 12 Bulan */}
@@ -250,9 +258,9 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
           </div>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-2xl font-black text-slate-900 font-mono">
-              3 / 12
+              {trendData.monthlyOverallScores.filter(hasNumber).length} / 12
             </span>
-            <span className="text-xs text-slate-500 font-medium">Bulan Berjalan</span>
+            <span className="text-xs text-slate-500 font-medium">Bulan Dinilai</span>
           </div>
           {/* 12-dot timeline */}
           <div className="mt-3 flex items-center gap-1">
@@ -260,9 +268,9 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
               <div 
                 key={m}
                 className={`h-2 flex-1 rounded-sm ${
-                  idx < 3 ? 'bg-emerald-500' : 'bg-slate-200'
+                  hasNumber(trendData.monthlyOverallScores[idx]) ? 'bg-emerald-500' : 'bg-slate-200'
                 }`}
-                title={`Bulan ${idx+1} (${m}): ${idx < 3 ? 'Data Terisi' : 'Belum Dimulai'}`}
+                title={`Bulan ${idx+1} (${m}): ${hasNumber(trendData.monthlyOverallScores[idx]) ? 'Dinilai' : 'Belum dinilai'}`}
               />
             ))}
           </div>
@@ -302,14 +310,14 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
 
             {trendData.monthlyOverallScores.map((score, idx) => {
               const isQuarter = idx === 2 || idx === 5 || idx === 8 || idx === 11;
-              const hasData = score > 0;
-              const heightPct = Math.max(8, Math.min(100, score));
+              const hasData = hasNumber(score);
+              const heightPct = hasData ? Math.max(0, Math.min(100, score)) : 0;
 
               return (
                 <div key={idx} className="flex flex-col items-center h-full justify-end group relative z-10">
                   {/* Tooltip on hover */}
                   <div className="absolute -top-12 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-900 text-white text-[11px] rounded-lg px-2.5 py-1 pointer-events-none shadow-xl whitespace-nowrap z-30 font-medium">
-                    <p className="font-bold">{monthFullNames[idx]}: {score.toFixed(1)}%</p>
+                    <p className="font-bold">{monthFullNames[idx]}: {formatNumber(score, '%')}</p>
                     <p className="text-[10px] text-slate-300">{isQuarter ? `Evaluasi Resmi TW ${Math.floor(idx/3)+1}` : 'Capaian Reguler'}</p>
                   </div>
 
@@ -317,7 +325,7 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
                   <span className={`text-[10px] sm:text-xs font-mono font-bold mb-1 transition-transform group-hover:-translate-y-1 ${
                     hasData ? 'text-slate-800' : 'text-slate-400'
                   }`}>
-                    {score > 0 ? `${score.toFixed(0)}%` : '-'}
+                    {formatNumber(score, '%', 0)}
                   </span>
 
                   {/* Bar */}
@@ -326,11 +334,9 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
                     className={`w-full max-w-[42px] rounded-t-xl transition-all duration-300 group-hover:brightness-110 cursor-pointer shadow-xs ${
                       !hasData
                         ? 'bg-slate-200 border border-slate-300 border-dashed'
-                        : isQuarter
-                        ? 'bg-gradient-to-t from-emerald-600 via-teal-500 to-cyan-400 border border-emerald-400/40'
-                        : score >= 91
+                        : hasNumber(score) && score >= 91
                         ? 'bg-gradient-to-t from-emerald-600 to-emerald-400'
-                        : score >= 81
+                        : hasNumber(score) && score >= 81
                         ? 'bg-gradient-to-t from-amber-600 to-amber-400'
                         : 'bg-gradient-to-t from-rose-600 to-rose-400'
                     }`}
@@ -389,7 +395,7 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
               }`}
             >
               <BarChart3 className="w-3.5 h-3.5" />
-              <span>Matriks Rinci 272 Indikator</span>
+              <span>Matriks Rinci Indikator</span>
             </button>
           </div>
 
@@ -497,12 +503,12 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
               <Calendar className="w-4 h-4 text-emerald-600" />
               <span>
                 {viewMode === 'KLASTER'
-                  ? 'Matriks Komparasi 5 Klaster & 29 Sub-klaster (Bulan 1 s/d 12)'
-                  : `Matriks Evaluasi Rinci 272 Indikator (${filteredIndicators.length} Elemen)`}
+                  ? 'Matriks Komparasi Klaster & Sub-klaster (Bulan 1 s/d 12)'
+                  : `Matriks Evaluasi Rinci Indikator (${filteredIndicators.length} Elemen)`}
               </span>
             </h3>
             <p className="text-[11px] text-slate-500 mt-0.5">
-              Nilai per kolom mewakili akumulasi capaian bulanan. Kolom Maret, Juni, September, dan Desember merefleksikan evaluasi resmi Triwulan.
+              Nilai per kolom adalah analitik bulanan dari server, bukan rekap kumulatif resmi. Penanda TW menunjukkan akhir triwulan; nilai tahunan mengikuti agregasi server.
             </p>
           </div>
 
@@ -559,6 +565,7 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
+              {((viewMode === 'INDICATOR' && !filteredIndicators.length) || (viewMode === 'KLASTER' && !trendData.klasters.some(k => selectedKlaster === 0 || k.klasterId === selectedKlaster))) && <tr><td colSpan={viewMode === 'INDICATOR' ? 19 : 17} className="p-6 text-center text-slate-500">Tidak ada data tren yang sesuai dengan filter ini.</td></tr>}
               {/* ===================== VIEW MODE 1: KLASTER & SUBKLASTER ===================== */}
               {viewMode === 'KLASTER' && (
                 <>
@@ -599,7 +606,7 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
                                   }`}
                                 >
                                   <span className={`inline-block px-1.5 py-0.5 rounded text-[11px] border ${getCellBadgeClass(score)}`}>
-                                    {score > 0 ? score.toFixed(1) : '-'}
+                                    {formatNumber(score)}
                                   </span>
                                 </td>
                               );
@@ -607,17 +614,17 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
 
                             {/* Annual Average */}
                             <td className="py-2.5 px-3 text-right font-mono font-black text-slate-900 border-r border-slate-200 bg-slate-50">
-                              {k.annualAverage}%
+                              {formatNumber(k.annualAverage, '%')}
                             </td>
 
                             {/* Category */}
                             <td className="py-2.5 px-3 text-center border-r border-slate-200">
                               <span className={`px-2 py-0.5 rounded-full text-[10px] font-black border ${
-                                k.category === 'Kinerja Baik' ? 'bg-emerald-50 text-emerald-800 border-emerald-300' :
+                                !hasNumber(k.annualAverage) ? 'bg-slate-100 text-slate-500 border-slate-200' : k.category === 'Kinerja Baik' ? 'bg-emerald-50 text-emerald-800 border-emerald-300' :
                                 k.category === 'Kinerja Cukup' ? 'bg-amber-50 text-amber-800 border-amber-300' :
                                 'bg-rose-50 text-rose-800 border-rose-300'
                               }`}>
-                                {k.category.replace('Kinerja ', '')}
+                                {hasNumber(k.annualAverage) ? k.category?.replace('Kinerja ', '') ?? 'Belum dinilai' : 'Belum dinilai'}
                               </span>
                             </td>
 
@@ -627,9 +634,9 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
                                 {k.monthlyScores.map((sc, scIdx) => (
                                   <div
                                     key={scIdx}
-                                    style={{ height: `${Math.max(15, Math.min(100, sc))}%` }}
+                                    style={{ height: hasNumber(sc) ? `${Math.max(0, Math.min(100, sc))}%` : '0%' }}
                                     className={`flex-1 rounded-xs ${
-                                      sc >= 91 ? 'bg-emerald-500' : sc >= 81 ? 'bg-amber-400' : sc > 0 ? 'bg-rose-400' : 'bg-slate-200'
+                                      !hasNumber(sc) ? 'bg-slate-200' : sc >= 91 ? 'bg-emerald-500' : sc >= 81 ? 'bg-amber-400' : 'bg-rose-400'
                                     }`}
                                   />
                                 ))}
@@ -658,7 +665,7 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
                                     }`}
                                   >
                                     <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] border ${getCellBadgeClass(score)}`}>
-                                      {score > 0 ? score.toFixed(1) : '-'}
+                                      {formatNumber(score)}
                                     </span>
                                   </td>
                                 );
@@ -666,17 +673,17 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
 
                               {/* Annual Average */}
                               <td className="py-2 px-3 text-right font-mono font-bold text-slate-800 border-r border-slate-200 bg-slate-50/50">
-                                {sub.annualAverage}%
+                                {formatNumber(sub.annualAverage, '%')}
                               </td>
 
                               {/* Category */}
                               <td className="py-2 px-3 text-center border-r border-slate-200">
                                 <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold border ${
-                                  sub.category === 'Kinerja Baik' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' :
+                                  !hasNumber(sub.annualAverage) ? 'bg-slate-100 text-slate-500 border-slate-200' : sub.category === 'Kinerja Baik' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' :
                                   sub.category === 'Kinerja Cukup' ? 'bg-amber-50 text-amber-800 border-amber-200' :
                                   'bg-rose-50 text-rose-800 border-rose-200'
                                 }`}>
-                                  {sub.category.replace('Kinerja ', '')}
+                                  {hasNumber(sub.annualAverage) ? sub.category?.replace('Kinerja ', '') ?? 'Belum dinilai' : 'Belum dinilai'}
                                 </span>
                               </td>
 
@@ -686,9 +693,9 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
                                   {sub.monthlyScores.map((sc, scIdx) => (
                                     <div
                                       key={scIdx}
-                                      style={{ height: `${Math.max(15, Math.min(100, sc))}%` }}
+                                      style={{ height: hasNumber(sc) ? `${Math.max(0, Math.min(100, sc))}%` : '0%' }}
                                       className={`flex-1 rounded-xs ${
-                                        sc >= 91 ? 'bg-emerald-500' : sc >= 81 ? 'bg-amber-400' : sc > 0 ? 'bg-rose-400' : 'bg-slate-200'
+                                        !hasNumber(sc) ? 'bg-slate-200' : sc >= 91 ? 'bg-emerald-500' : sc >= 81 ? 'bg-amber-400' : 'bg-rose-400'
                                       }`}
                                     />
                                   ))}
@@ -739,13 +746,12 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
                           {item.indicator.satuan}
                         </td>
                         <td className="py-2 px-2 text-right font-mono text-[11px] text-slate-600 border-r border-slate-200">
-                          {item.indicator.targetSasaranDefault > 0 ? (item.indicator.targetSasaranDefault / 12).toFixed(1) : '-'}
+                          {formatNumber(pkpStore.getAnnualTargets()[item.indicator.id]?.targetSasaran == null ? null : pkpStore.getAnnualTargets()[item.indicator.id].targetSasaran / 12)}
                         </td>
 
                         {/* 12 Months Cells */}
-                        {values.map((val, idx) => {
+                        {months(values).map((val, idx) => {
                           const isQuarter = idx === 2 || idx === 5 || idx === 8 || idx === 11;
-                          const scoreVal = item.monthlyScores[idx];
 
                           return (
                             <td 
@@ -757,9 +763,9 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
                               <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] border ${
                                 metricType === 'SCORE'
                                   ? getCellBadgeClass(val)
-                                  : val > 0 ? 'bg-slate-100 text-slate-800 border-slate-300 font-bold' : 'bg-slate-50 text-slate-400 border-slate-200'
+                                  : hasNumber(val) ? 'bg-slate-100 text-slate-800 border-slate-300 font-bold' : 'bg-slate-50 text-slate-400 border-slate-200'
                               }`}>
-                                {val > 0 
+                                {hasNumber(val)
                                   ? (metricType === 'NUMERATOR' ? val : `${val.toFixed(1)}${metricType === 'PERCENT' ? '%' : ''}`) 
                                   : '-'}
                               </span>
@@ -769,29 +775,29 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
 
                         {/* Annual Average */}
                         <td className="py-2 px-3 text-right font-mono font-bold text-slate-900 border-r border-slate-200 bg-slate-50/60">
-                          {metricType === 'PERCENT' ? `${item.annualAveragePct}%` : item.annualAverageScore}
+                          {metricType === 'NUMERATOR' ? '-' : formatNumber(metricType === 'PERCENT' ? item.annualAveragePct : item.annualAverageScore, metricType === 'PERCENT' ? '%' : '')}
                         </td>
 
                         {/* Category */}
                         <td className="py-2 px-3 text-center border-r border-slate-200">
                           <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold border ${
-                            item.category === 'Kinerja Baik' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' :
+                            !hasNumber(item.annualAverageScore) ? 'bg-slate-100 text-slate-500 border-slate-200' : item.category === 'Kinerja Baik' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' :
                             item.category === 'Kinerja Cukup' ? 'bg-amber-50 text-amber-800 border-amber-200' :
                             'bg-rose-50 text-rose-800 border-rose-200'
                           }`}>
-                            {item.category.replace('Kinerja ', '')}
+                            {hasNumber(item.annualAverageScore) ? item.category?.replace('Kinerja ', '') ?? 'Belum dinilai' : 'Belum dinilai'}
                           </span>
                         </td>
 
                         {/* Sparkline Visual Bar */}
                         <td className="py-2 px-3 text-center">
                           <div className="flex items-end gap-0.5 h-4 w-16 mx-auto">
-                            {item.monthlyScores.map((sc, scIdx) => (
+                            {months(item.monthlyScores).map((sc, scIdx) => (
                               <div
                                 key={scIdx}
-                                style={{ height: `${Math.max(15, Math.min(100, sc))}%` }}
+                                style={{ height: hasNumber(sc) ? `${Math.max(0, Math.min(100, sc))}%` : '0%' }}
                                 className={`flex-1 rounded-xs ${
-                                  sc >= 91 ? 'bg-emerald-500' : sc >= 81 ? 'bg-amber-400' : sc > 0 ? 'bg-rose-400' : 'bg-slate-200'
+                                  !hasNumber(sc) ? 'bg-slate-200' : sc >= 91 ? 'bg-emerald-500' : sc >= 81 ? 'bg-amber-400' : 'bg-rose-400'
                                 }`}
                               />
                             ))}

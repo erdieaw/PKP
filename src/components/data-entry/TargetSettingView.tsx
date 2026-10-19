@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { pkpStore } from '../../services/mockState';
+import React, { useState, useSyncExternalStore } from 'react';
+import { pkpStore } from '../../services/apiStore';
 import { Target, Search, Lock, Unlock, Check, AlertCircle } from 'lucide-react';
 import { PolarityBadge } from '../common/PolarityBadge';
 
@@ -10,6 +10,12 @@ export const TargetSettingView: React.FC = () => {
   const [targetPctInput, setTargetPctInput] = useState<string>('100');
   const [totalSasaranInput, setTotalSasaranInput] = useState<string>('0');
   const [notification, setNotification] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useSyncExternalStore(pkpStore.subscribe, pkpStore.getSnapshot, pkpStore.getServerSnapshot);
+  const year = pkpStore.getCurrentYear();
+  const canEdit = (id: string) => !pkpStore.getLoadState().loading && pkpStore.getCurrentUser().role === 'ADMIN_PUSKESMAS' &&
+    !pkpStore.getAnnualTargets()[id]?.isLocked && !pkpStore.isPeriodLocked(year, 4, true);
 
   const indicators = pkpStore.getIndicators();
   const annualTargets = pkpStore.getAnnualTargets();
@@ -33,23 +39,32 @@ export const TargetSettingView: React.FC = () => {
     return true;
   });
 
-  const handleStartEdit = (indId: string, currentPct: number, currentTot: number) => {
+  const handleStartEdit = (indId: string, currentPct: number | null | undefined, currentTot: number | null | undefined) => {
+    if (pending || !canEdit(indId)) return;
     setEditingId(indId);
-    setTargetPctInput(currentPct.toString());
-    setTotalSasaranInput(currentTot.toString());
+    setTargetPctInput(currentPct?.toString() ?? '');
+    setTotalSasaranInput(currentTot?.toString() ?? '');
   };
 
-  const handleSave = (indId: string) => {
-    const pct = parseFloat(targetPctInput) || 0;
-    const tot = parseFloat(totalSasaranInput) || 0;
-    pkpStore.updateAnnualTarget(indId, pct, tot);
-    setEditingId(null);
-    setNotification('Target tahunan berhasil disimpan!');
-    setTimeout(() => setNotification(null), 3000);
+  const handleSave = async (indId: string) => {
+    if (pending || !canEdit(indId)) return;
+    const pct = Number(targetPctInput);
+    const tot = Number(totalSasaranInput);
+    if (!targetPctInput.trim() || !totalSasaranInput.trim() || !Number.isFinite(pct) || !Number.isFinite(tot) || pct < 0 || tot < 0) {
+      setError('Target dan total sasaran harus berupa angka valid nonnegatif.'); return;
+    }
+    setPending(true); setError(null); setNotification(null);
+    try {
+      await pkpStore.updateAnnualTarget(indId, pct, tot);
+      setEditingId(null); setNotification('Target tahunan berhasil disimpan!');
+    } catch (e) { setError(e instanceof Error ? e.message : 'Penyimpanan gagal.'); }
+    finally { setPending(false); }
   };
 
   return (
     <div className="space-y-6">
+      {error && <p role="alert" className="p-3 bg-rose-50 text-rose-800 rounded-xl">{error}</p>}
+      {pending && <p role="status">Menyimpan target...</p>}
       {/* Header */}
       <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
@@ -58,10 +73,10 @@ export const TargetSettingView: React.FC = () => {
             <span>Siklus Perencanaan Awal Tahun (1x Setahun)</span>
           </div>
           <h2 className="text-xl font-bold text-slate-800">
-            Penetapan Target Sasaran Tahunan 2026
+            Penetapan Target Sasaran Tahunan {year}
           </h2>
           <p className="text-xs text-slate-500">
-            Tentukan denominator (total sasaran riil wilayah) dan persentase target tahunan untuk seluruh 282 indikator. Target fisik bulanan dihitung otomatis secara proporsional.
+            Tentukan denominator (total sasaran riil wilayah) dan persentase target tahunan untuk {indicators.length} indikator. Target fisik dihitung oleh server.
           </p>
         </div>
 
@@ -127,12 +142,8 @@ export const TargetSettingView: React.FC = () => {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.map((ind) => {
-                const target = annualTargets[ind.id] || {
-                  targetPct: ind.targetNumeric * 100,
-                  totalSasaran: ind.totalSasaranDefault,
-                  targetSasaran: ind.targetSasaranDefault
-                };
-                const isEditing = editingId === ind.id;
+                const target = annualTargets[ind.id];
+                const isEditing = editingId === ind.id && canEdit(ind.id);
                 const officialCode = `${ind.sectionCode}.${ind.no.replace('.', '')}`;
 
                 return (
@@ -160,6 +171,8 @@ export const TargetSettingView: React.FC = () => {
                     <td className="py-2.5 px-3 text-right align-top">
                       {isEditing ? (
                         <input
+                          aria-label={`Target persen ${officialCode}`}
+                          disabled={pending}
                           type="number"
                           value={targetPctInput}
                           onChange={(e) => setTargetPctInput(e.target.value)}
@@ -167,7 +180,7 @@ export const TargetSettingView: React.FC = () => {
                         />
                       ) : (
                         <span className="font-mono font-bold text-slate-800">
-                          {target.targetPct}%
+                          {target?.targetPct == null ? '-' : `${target.targetPct}%`}
                         </span>
                       )}
                     </td>
@@ -176,6 +189,8 @@ export const TargetSettingView: React.FC = () => {
                     <td className="py-2.5 px-3 text-right align-top">
                       {isEditing ? (
                         <input
+                          aria-label={`Total sasaran ${officialCode}`}
+                          disabled={pending}
                           type="number"
                           value={totalSasaranInput}
                           onChange={(e) => setTotalSasaranInput(e.target.value)}
@@ -183,18 +198,14 @@ export const TargetSettingView: React.FC = () => {
                         />
                       ) : (
                         <span className="font-mono text-slate-700">
-                          {target.totalSasaran}
+                          {target?.totalSasaran ?? '-'}
                         </span>
                       )}
                     </td>
 
                     {/* Target Sasaran Fisik */}
                     <td className="py-2.5 px-3 text-right font-mono font-bold text-emerald-700 align-top">
-                      {isEditing ? (
-                        ((parseFloat(targetPctInput) || 0) / 100 * (parseFloat(totalSasaranInput) || 0)).toFixed(1)
-                      ) : (
-                        target.targetSasaran.toFixed(1)
-                      )}
+                      {target?.targetSasaran?.toFixed(1) ?? '-'}
                     </td>
 
                     {/* Action */}
@@ -203,12 +214,14 @@ export const TargetSettingView: React.FC = () => {
                         <div className="flex items-center justify-center gap-1">
                           <button
                             onClick={() => handleSave(ind.id)}
+                            disabled={pending}
                             className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[11px] font-bold"
                           >
                             Simpan
                           </button>
                           <button
                             onClick={() => setEditingId(null)}
+                            disabled={pending}
                             className="px-2 py-1 bg-slate-200 text-slate-700 rounded text-[11px]"
                           >
                             Batal
@@ -216,7 +229,8 @@ export const TargetSettingView: React.FC = () => {
                         </div>
                       ) : (
                         <button
-                          onClick={() => handleStartEdit(ind.id, target.targetPct, target.totalSasaran)}
+                          onClick={() => handleStartEdit(ind.id, target?.targetPct, target?.totalSasaran)}
+                          disabled={pending || !canEdit(ind.id)}
                           className="px-2.5 py-1 bg-slate-100 hover:bg-emerald-50 text-slate-600 hover:text-emerald-700 border border-slate-200 rounded text-[11px] font-semibold"
                         >
                           Ubah Sasaran

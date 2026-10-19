@@ -1,6 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { pkpStore } from '../../services/mockState';
-import { Sheet7OfficialSummary, PeriodLockState } from '../../types/pkp';
+import React, { useState, useSyncExternalStore } from 'react';
+import { pkpStore } from '../../services/apiStore';
+import { ApiError } from '../../services/apiClient';
+import { useReportExport } from '../export/useReportExport';
+import { Sheet7OfficialSummary } from '../../types/pkp';
 import { AppLogo } from '../common/AppLogo';
 import { 
   FileText, 
@@ -24,100 +26,93 @@ import {
 
 export const OfficialPerformanceSheet7: React.FC = () => {
   const [selectedQuarter, setSelectedQuarter] = useState<1 | 2 | 3 | 4 | 'ANNUAL'>(1);
+  useSyncExternalStore(pkpStore.subscribe, pkpStore.getSnapshot, pkpStore.getServerSnapshot);
   const currentYear = pkpStore.getCurrentYear();
   const currentUser = pkpStore.getCurrentUser();
   const isDinkes = currentUser.role === 'DINKES_ADMIN';
 
-  const [summaryData, setSummaryData] = useState<Sheet7OfficialSummary>(
-    pkpStore.getOfficialSheet7Data(selectedQuarter, currentYear)
-  );
-
-  const [lockState, setLockState] = useState<PeriodLockState>(
-    pkpStore.getPeriodLock(currentYear, selectedQuarter === 'ANNUAL' ? 12 : selectedQuarter, selectedQuarter !== 'ANNUAL')
-  );
+  let summaryData: Sheet7OfficialSummary | null = null;
+  try { summaryData = pkpStore.getOfficialSheet7Data(selectedQuarter, currentYear); } catch { /* Scope is loading. */ }
+  const periodNum = selectedQuarter === 'ANNUAL' ? 4 : selectedQuarter;
+  const lockState = pkpStore.getPeriodLock(currentYear, periodNum, true);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const reportExport = useReportExport(`${pkpStore.getSelectedHealthCenterId()}:${currentYear}:${selectedQuarter}`);
 
   const [showSubmitModal, setShowSubmitModal] = useState<boolean>(false);
   const [showRevisionModal, setShowRevisionModal] = useState<boolean>(false);
   const [revisionNoteInput, setRevisionNoteInput] = useState<string>('');
   const [notification, setNotification] = useState<string | null>(null);
 
-  // Subscribe to changes in store
-  useEffect(() => {
-    const refreshData = () => {
-      setSummaryData(pkpStore.getOfficialSheet7Data(selectedQuarter, currentYear));
-      setLockState(pkpStore.getPeriodLock(
-        currentYear, 
-        selectedQuarter === 'ANNUAL' ? 12 : selectedQuarter, 
-        selectedQuarter !== 'ANNUAL'
-      ));
-    };
-
-    const unsub = pkpStore.subscribe(refreshData);
-    refreshData();
-    return () => unsub();
-  }, [selectedQuarter, currentYear]);
-
   const handleQuarterChange = (q: 1 | 2 | 3 | 4 | 'ANNUAL') => {
+    if (pending) return;
     setSelectedQuarter(q);
-    setSummaryData(pkpStore.getOfficialSheet7Data(q, currentYear));
-    setLockState(pkpStore.getPeriodLock(
-      currentYear, 
-      q === 'ANNUAL' ? 12 : q, 
-      q !== 'ANNUAL'
-    ));
+    setError(null); setNotification(null); setShowSubmitModal(false); setShowRevisionModal(false);
   };
 
   const handlePrint = () => {
-    window.print();
+    void reportExport.create('pdf', selectedQuarter);
   };
 
   // Workflow Handlers
-  const handleSubmitToDinkes = () => {
-    const periodNum = selectedQuarter === 'ANNUAL' ? 12 : selectedQuarter;
-    const isQ = selectedQuarter !== 'ANNUAL';
-    pkpStore.submitPeriod(currentYear, periodNum, isQ, currentUser.name);
+  const runWorkflow = async (action: (cascade: boolean) => Promise<unknown>) => {
+    if (pending) return false;
+    setPending(true); setError(null); setNotification(null);
+    try {
+      try { await action(false); }
+      catch (e) {
+        if (!(e instanceof ApiError) || e.status !== 409 || !e.dependencies || !window.confirm(`${e.message}\n${JSON.stringify(e.dependencies)}\nBuka juga seluruh periode terkait?`)) throw e;
+        await action(true);
+      }
+      return true;
+    } catch (e) { setError(e instanceof Error ? e.message : 'Operasi gagal.'); return false; }
+    finally { setPending(false); }
+  };
+  const handleSubmitToDinkes = async () => {
+    if (currentUser.role !== 'ADMIN_PUSKESMAS' || pkpStore.isPeriodLocked(currentYear, periodNum, true)) return;
+    if (!await runWorkflow(() => pkpStore.submitPeriod(currentYear, periodNum, true))) return;
     setShowSubmitModal(false);
     setNotification('Laporan Kinerja resmi berhasil diajukan ke Dinas Kesehatan dan dikunci untuk verifikasi.');
-    setTimeout(() => setNotification(null), 3500);
   };
 
-  const handleVerifyByDinkes = () => {
-    const periodNum = selectedQuarter === 'ANNUAL' ? 12 : selectedQuarter;
-    const isQ = selectedQuarter !== 'ANNUAL';
-    pkpStore.verifyAndLockPeriod(currentYear, periodNum, isQ, `${currentUser.name} (Dinkes)`);
+  const handleVerifyByDinkes = async () => {
+    if (!isDinkes || !await runWorkflow(() => pkpStore.verifyAndLockPeriod(currentYear, periodNum, true))) return;
     setNotification('Hasil Kinerja Puskesmas telah DIVERIFIKASI & DIKUNCI secara sah oleh Dinas Kesehatan.');
-    setTimeout(() => setNotification(null), 3500);
   };
 
-  const handleRequestRevision = () => {
+  const handleRequestRevision = async () => {
     if (!revisionNoteInput.trim()) return;
-    const periodNum = selectedQuarter === 'ANNUAL' ? 12 : selectedQuarter;
-    const isQ = selectedQuarter !== 'ANNUAL';
-    pkpStore.requestRevisionPeriod(currentYear, periodNum, isQ, `${currentUser.name} (Dinkes)`, revisionNoteInput);
+    if (!isDinkes || !await runWorkflow(cascade => pkpStore.requestRevisionPeriod(currentYear, periodNum, true, revisionNoteInput.trim(), undefined, cascade))) return;
     setShowRevisionModal(false);
     setRevisionNoteInput('');
     setNotification('Catatan revisi telah dikirimkan kembali ke Puskesmas.');
-    setTimeout(() => setNotification(null), 3500);
   };
 
-  const handleUnlockForEdit = () => {
-    const periodNum = selectedQuarter === 'ANNUAL' ? 12 : selectedQuarter;
-    const isQ = selectedQuarter !== 'ANNUAL';
-    pkpStore.unlockPeriodForEdit(currentYear, periodNum, isQ, currentUser.name);
+  const handleUnlockForEdit = async () => {
+    if (!isDinkes || pending) return;
+    const reason = window.prompt('Alasan membuka kunci revisi (wajib):');
+    if (!reason?.trim()) return;
+    if (!await runWorkflow(cascade => pkpStore.unlockPeriodForEdit(currentYear, periodNum, true, undefined, reason.trim(), cascade))) return;
     setNotification('Kunci data periode ini telah dibuka oleh Dinas Kesehatan.');
-    setTimeout(() => setNotification(null), 3500);
   };
 
-  const getScoreBadge = (score: number) => {
+  const getScoreBadge = (score: number | null | undefined) => {
+    if (score == null) return 'bg-slate-100 text-slate-500 border-slate-200';
     if (score >= 91) return 'bg-emerald-100 text-emerald-800 border-emerald-300';
     if (score >= 81) return 'bg-amber-100 text-amber-800 border-amber-300';
     return 'bg-rose-100 text-rose-800 border-rose-300';
   };
 
-  const isLocked = lockState.status === 'VERIFIED' || lockState.status === 'SUBMITTED';
+  const isLocked = pkpStore.isPeriodLocked(currentYear, periodNum, true);
+  if (!summaryData) return <div role={pkpStore.getLoadState().error ? 'alert' : 'status'} className="p-6 bg-white rounded-2xl border border-slate-200">{pkpStore.getLoadState().error?.message ?? 'Ringkasan server belum tersedia untuk periode ini.'}</div>;
 
   return (
     <div className="space-y-6">
+      {error && <p role="alert" className="p-4 bg-rose-50 text-rose-800 rounded-xl">{error}</p>}
+      {pending && <p role="status">Menyimpan perubahan periode ke server...</p>}
+      {reportExport.error && <p role="alert" className="p-4 bg-rose-50 text-rose-800 rounded-xl">{reportExport.error}</p>}
+      {reportExport.pending && <p role="status">Server sedang memproses PDF resmi...</p>}
+      {reportExport.file && <a href={reportExport.file.url} download={reportExport.file.name} target="_blank" rel="noreferrer" className="block p-4 bg-emerald-50 text-emerald-800 rounded-xl underline">Unduh {reportExport.file.name}</a>}
       {/* ===================== NOTIFICATION TOAST ===================== */}
       {notification && (
         <div className="no-print p-4 bg-emerald-50 border border-emerald-300 rounded-xl flex items-center justify-between text-emerald-900 text-sm font-semibold shadow-sm animate-in fade-in">
@@ -141,8 +136,8 @@ export const OfficialPerformanceSheet7: React.FC = () => {
           <h2 className="text-2xl font-black text-slate-800 tracking-tight flex items-center gap-2">
             Lembar Hasil Kinerja Puskesmas (NILAI KINERJA {currentYear})
           </h2>
-          <p className="text-xs text-slate-500 mt-1 max-w-2xl">
-            Rekapitulasi resmi seluruh 5 Klaster dan 29 Sub-klaster Penilaian Kinerja Puskesmas (PKP). Dilengkapi alur verifikasi berjenjang dan cetak Berita Acara bertandatangan.
+            <p className="text-xs text-slate-500 mt-1 max-w-2xl">
+            Rekapitulasi server untuk seluruh klaster. Triwulan adalah kumulatif YTD dari Januari sampai akhir triwulan. Dokumen resmi diunduh dari server.
           </p>
         </div>
 
@@ -195,10 +190,11 @@ export const OfficialPerformanceSheet7: React.FC = () => {
           {/* Print Button */}
           <button
             onClick={handlePrint}
+            disabled={reportExport.pending || currentUser.role === 'PIC'}
             className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs flex items-center gap-2 shadow-sm transition-all"
           >
             <Printer className="w-4 h-4" />
-            <span>Cetak Berita Acara (Print)</span>
+            <span>Unduh Berita Acara (PDF Resmi)</span>
           </button>
         </div>
       </div>
@@ -229,6 +225,7 @@ export const OfficialPerformanceSheet7: React.FC = () => {
             {isDinkes && (
               <button
                 onClick={handleUnlockForEdit}
+                disabled={pending}
                 className="px-3 py-1.5 rounded-lg bg-white border border-emerald-300 hover:bg-emerald-100 text-emerald-800 text-xs font-bold flex items-center gap-1.5 transition-all self-start md:self-auto"
               >
                 <Unlock className="w-3.5 h-3.5 text-emerald-700" />
@@ -269,6 +266,7 @@ export const OfficialPerformanceSheet7: React.FC = () => {
                 </button>
                 <button
                   onClick={handleVerifyByDinkes}
+                  disabled={pending}
                   className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all"
                 >
                   <CheckCircle2 className="w-4 h-4" />
@@ -304,7 +302,7 @@ export const OfficialPerformanceSheet7: React.FC = () => {
               </div>
             </div>
 
-            {!isDinkes && (
+            {currentUser.role === 'ADMIN_PUSKESMAS' && !isLocked && (
               <button
                 onClick={() => setShowSubmitModal(true)}
                 className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all self-start md:self-auto"
@@ -337,7 +335,7 @@ export const OfficialPerformanceSheet7: React.FC = () => {
               </div>
             </div>
 
-            {!isDinkes && (
+            {currentUser.role === 'ADMIN_PUSKESMAS' && !isLocked && (
               <button
                 onClick={() => setShowSubmitModal(true)}
                 className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-2 shadow-sm transition-all self-start md:self-auto"
@@ -363,7 +361,7 @@ export const OfficialPerformanceSheet7: React.FC = () => {
             </div>
             <div className="flex items-baseline gap-3">
               <span className="text-4xl font-black tracking-tight text-white">
-                {summaryData.nilaiKinerjaPuskesmas.toFixed(2)}
+                {summaryData.nilaiKinerjaPuskesmas?.toFixed(2) ?? '-'}
               </span>
               <span className="text-sm font-semibold text-slate-400">/ 100</span>
             </div>
@@ -376,7 +374,7 @@ export const OfficialPerformanceSheet7: React.FC = () => {
                   ? 'bg-amber-500 text-slate-950'
                   : 'bg-rose-500 text-white'
               }`}>
-                {summaryData.kategoriPKP}
+                {summaryData.kategoriPKP ?? '-'}
               </span>
               <span className="text-[11px] text-slate-400">
                 (Standar PKP Jatim & Kemenkes)
@@ -408,14 +406,14 @@ export const OfficialPerformanceSheet7: React.FC = () => {
               </div>
               <div className="mt-2">
                 <span className="text-xl font-black text-slate-900">
-                  {k.score.toFixed(2)}
+                  {k.score?.toFixed(2) ?? '-'}
                 </span>
                 <div className={`mt-1 h-1.5 w-full rounded-full bg-slate-100 overflow-hidden`}>
                   <div 
                     className={`h-full rounded-full ${
-                      k.score >= 91 ? 'bg-emerald-500' : k.score >= 81 ? 'bg-amber-500' : 'bg-rose-500'
+                      k.score == null ? 'bg-slate-200' : k.score >= 91 ? 'bg-emerald-500' : k.score >= 81 ? 'bg-amber-500' : 'bg-rose-500'
                     }`}
-                    style={{ width: `${Math.min(100, k.score)}%` }}
+                    style={{ width: k.score == null ? '0%' : `${Math.min(100, k.score)}%` }}
                   />
                 </div>
               </div>
@@ -433,16 +431,16 @@ export const OfficialPerformanceSheet7: React.FC = () => {
             <AppLogo variant="official" size="md" />
             <div className="text-right">
               <h3 className="text-xs font-bold tracking-wider uppercase text-slate-800">
-                Pemerintah Kabupaten Malang • Dinas Kesehatan
+                Dinas Kesehatan
               </h3>
               <h2 className="text-base font-black tracking-tight uppercase text-slate-900">
-                UPT PUSKESMAS KEBONAGUNG
+                {summaryData.puskesmasName}
               </h2>
               <p className="text-[10px] text-slate-700">
-                Jl. Raya Kebonagung No. 123, Kec. Pakisaji, Kab. Malang, Jawa Timur 65162
+                Pratinjau data server. Dokumen resmi tersedia melalui unduhan PDF.
               </p>
               <p className="text-[9px] text-slate-600">
-                Telp: (0341) 801234 | Email: pkm.kebonagung@malangkab.go.id | Kode Faskes: P35070101
+                Kode Faskes: {summaryData.puskesmasCode}
               </p>
             </div>
           </div>
@@ -451,13 +449,13 @@ export const OfficialPerformanceSheet7: React.FC = () => {
         {/* PRINT ONLY: BERITA ACARA HEADER */}
         <div className="print-only text-center my-4">
           <h1 className="text-base font-black uppercase tracking-tight underline">
-            BERITA ACARA EVALUASI HASIL PENILAIAN KINERJA PUSKESMAS (PKP)
+            PRATINJAU HASIL PENILAIAN KINERJA PUSKESMAS (BUKAN BERITA ACARA RESMI)
           </h1>
           <p className="text-xs font-semibold mt-1">
-            Nomor: 440 / {selectedQuarter === 'ANNUAL' ? 'THN' : `TW${selectedQuarter}`} / PKP / 35.07.101 / {currentYear}
+            Periode: {summaryData.periodLabel} / {currentYear}
           </p>
           <p className="text-xs text-slate-700 mt-2 text-justify">
-            Pada hari ini, bertempat di UPT Puskesmas Kebonagung, telah dilakukan evaluasi dan verifikasi data capaian Penilaian Kinerja Puskesmas (PKP) Periode <strong>{summaryData.periodLabel}</strong> Tahun Anggaran <strong>{currentYear}</strong> berdasarkan instrumen standar Dinas Kesehatan Provinsi Jawa Timur dan Kepmenkes RI, dengan hasil sebagai berikut:
+            Pratinjau capaian {summaryData.puskesmasName} periode <strong>{summaryData.periodLabel}</strong> tahun <strong>{currentYear}</strong>. Status verifikasi mengikuti data server: {lockState.status}.
           </p>
         </div>
 
@@ -500,11 +498,11 @@ export const OfficialPerformanceSheet7: React.FC = () => {
                 <td className="py-3 px-3 text-right border-r border-slate-200">-</td>
                 <td className="py-3 px-3 text-right border-r border-slate-200">-</td>
                 <td className="py-3 px-3 text-right text-emerald-900 text-sm font-black border-r border-slate-200">
-                  {summaryData.nilaiKinerjaPuskesmas.toFixed(2)}
+                  {summaryData.nilaiKinerjaPuskesmas?.toFixed(2) ?? '-'}
                 </td>
                 <td className="py-3 px-3 text-center border-r border-slate-200">
                   <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-black border ${getScoreBadge(summaryData.nilaiKinerjaPuskesmas)}`}>
-                    {summaryData.kategoriPKP}
+                    {summaryData.kategoriPKP ?? '-'}
                   </span>
                 </td>
                 <td className="py-3 px-4 text-[11px] text-slate-600 italic">
@@ -525,12 +523,12 @@ export const OfficialPerformanceSheet7: React.FC = () => {
                       </td>
                       <td className="py-2.5 px-3 text-right border-r border-slate-200 text-slate-400 font-mono">-</td>
                       <td className="py-2.5 px-3 text-right font-mono text-slate-900 text-xs border-r border-slate-200 bg-slate-100/60 font-bold">
-                        {row.nilaiKlaster?.toFixed(2) || '0.00'}
+                        {row.nilaiKlaster?.toFixed(2) ?? '-'}
                       </td>
                       <td className="py-2.5 px-3 text-right border-r border-slate-200 font-mono text-slate-400">-</td>
                       <td className="py-2.5 px-3 text-center border-r border-slate-200">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${getScoreBadge(row.nilaiKlaster || 0)}`}>
-                          {(row.nilaiKlaster || 0) >= 91 ? 'Baik' : (row.nilaiKlaster || 0) >= 81 ? 'Sedang' : 'Kurang'}
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${getScoreBadge(row.nilaiKlaster)}`}>
+                          {row.nilaiKlaster == null ? '-' : row.nilaiKlaster >= 91 ? 'Baik' : row.nilaiKlaster >= 81 ? 'Sedang' : 'Kurang'}
                         </span>
                       </td>
                       <td className="py-2.5 px-4 text-[11px] text-slate-400 italic">
@@ -550,7 +548,7 @@ export const OfficialPerformanceSheet7: React.FC = () => {
                       {row.name}
                     </td>
                     <td className="py-2 px-3 text-right font-mono font-semibold border-r border-slate-200 text-slate-900">
-                      {row.nilaiKelompok?.toFixed(2) || '0.00'}
+                      {row.nilaiKelompok?.toFixed(2) ?? '-'}
                     </td>
                     <td className="py-2 px-3 text-right border-r border-slate-200 text-slate-400 font-mono text-[11px]">-</td>
                     <td className="py-2 px-3 text-right border-r border-slate-200 text-slate-400 font-mono text-[11px]">-</td>
@@ -560,7 +558,7 @@ export const OfficialPerformanceSheet7: React.FC = () => {
                         (row.nilaiKelompok || 0) >= 81 ? 'text-amber-700 bg-amber-50' : 
                         'text-rose-700 bg-rose-50'
                       }`}>
-                        {(row.nilaiKelompok || 0) >= 91 ? 'Baik' : (row.nilaiKelompok || 0) >= 81 ? 'Sedang' : 'Kurang'}
+                        {row.nilaiKelompok == null ? '-' : row.nilaiKelompok >= 91 ? 'Baik' : row.nilaiKelompok >= 81 ? 'Sedang' : 'Kurang'}
                       </span>
                     </td>
                     <td className="py-2 px-4 text-[11px] text-slate-600">
@@ -569,7 +567,7 @@ export const OfficialPerformanceSheet7: React.FC = () => {
                           {row.rekomendasi}
                         </span>
                       ) : (
-                        <span className="text-slate-400 italic">Sesuai standar operasional</span>
+                        <span className="text-slate-400 italic">-</span>
                       )}
                     </td>
                   </tr>
@@ -582,7 +580,7 @@ export const OfficialPerformanceSheet7: React.FC = () => {
         {/* PRINT ONLY: OFFICIAL SIGNATURE BLOCKS */}
         <div className="print-only mt-10 pt-6 border-t border-slate-300">
           <p className="text-xs text-right text-slate-800 mb-8 font-serif">
-            Malang, 31 Maret {currentYear}
+            Dokumen resmi dan pengesahan hanya tersedia pada PDF yang dihasilkan server.
           </p>
 
           <div className="grid grid-cols-3 gap-6 text-center text-xs">
@@ -590,7 +588,7 @@ export const OfficialPerformanceSheet7: React.FC = () => {
             <div>
               <p className="font-bold text-slate-800 uppercase">
                 Menyetujui,<br />
-                Kepala UPT Puskesmas Kebonagung
+                Kepala {summaryData.puskesmasName}
               </p>
               <div className="h-20 flex items-center justify-center text-[10px] text-slate-400 italic">
                 (Tanda Tangan & Cap Faskes)
@@ -607,16 +605,16 @@ export const OfficialPerformanceSheet7: React.FC = () => {
             <div>
               <p className="font-bold text-slate-800 uppercase">
                 Tim Pembina / Verifikator<br />
-                Dinas Kesehatan Kab. Malang
+                Dinas Kesehatan
               </p>
               <div className="h-20 flex items-center justify-center text-[10px] text-slate-400 italic">
                 (Tanda Tangan Verifikator)
               </div>
               <p className="font-bold underline text-slate-900">
-                drg. Sulistyaningsih, M.M.R
+                {lockState.verifiedBy ?? '-'}
               </p>
               <p className="text-[10px] text-slate-600">
-                NIP. 19720315 199903 2 004
+                Identitas pengesah mengikuti dokumen server.
               </p>
             </div>
 
@@ -624,16 +622,16 @@ export const OfficialPerformanceSheet7: React.FC = () => {
             <div>
               <p className="font-bold text-slate-800 uppercase">
                 Mengetahui,<br />
-                Kepala Dinas Kesehatan Kab. Malang
+                Kepala Dinas Kesehatan
               </p>
               <div className="h-20 flex items-center justify-center text-[10px] text-slate-400 italic">
                 (Tanda Tangan & Cap Dinas)
               </div>
               <p className="font-bold underline text-slate-900">
-                dr. Wiyanto Wijoyo, M.M.Kes
+                -
               </p>
               <p className="text-[10px] text-slate-600">
-                NIP. 19680512 199803 1 007
+                Identitas pengesah mengikuti dokumen server.
               </p>
             </div>
           </div>
@@ -644,7 +642,7 @@ export const OfficialPerformanceSheet7: React.FC = () => {
       {/* ===================== SUBMISSION CONFIRMATION MODAL ===================== */}
       {showSubmitModal && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200">
+          <div role="dialog" aria-modal="true" aria-label="Ajukan laporan kinerja" className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200">
             <div className="w-12 h-12 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center mb-4">
               <Send className="w-6 h-6" />
             </div>
@@ -666,6 +664,7 @@ export const OfficialPerformanceSheet7: React.FC = () => {
               </button>
               <button
                 onClick={handleSubmitToDinkes}
+                disabled={pending || isLocked}
                 className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm transition-all flex items-center gap-2"
               >
                 <Check className="w-4 h-4" />
@@ -679,7 +678,7 @@ export const OfficialPerformanceSheet7: React.FC = () => {
       {/* ===================== REVISION REQUEST MODAL (DINKES) ===================== */}
       {showRevisionModal && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200">
+          <div role="dialog" aria-modal="true" aria-label="Minta perbaikan data" className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200">
             <div className="w-12 h-12 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center mb-4">
               <AlertTriangle className="w-6 h-6" />
             </div>
@@ -695,6 +694,8 @@ export const OfficialPerformanceSheet7: React.FC = () => {
                 Catatan / Instruksi Pembinaan Dinkes
               </label>
               <textarea
+                aria-label="Catatan pembinaan Dinkes"
+                disabled={pending}
                 value={revisionNoteInput}
                 onChange={(e) => setRevisionNoteInput(e.target.value)}
                 placeholder="Contoh: Tolong verifikasi kembali cakupan imunisasi campak pada bulan Maret, denominator sasaran belum selaras dengan DO..."
@@ -712,7 +713,7 @@ export const OfficialPerformanceSheet7: React.FC = () => {
               </button>
               <button
                 onClick={handleRequestRevision}
-                disabled={!revisionNoteInput.trim()}
+                disabled={pending || !revisionNoteInput.trim()}
                 className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-bold shadow-sm transition-all"
               >
                 Kirim Catatan Revisi

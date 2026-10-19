@@ -1,13 +1,10 @@
-import React from 'react';
-import { pkpStore } from '../../services/mockState';
-import { calculateRollup } from '../../services/pkpCalculator';
+import React, { useSyncExternalStore } from 'react';
+import { pkpStore } from '../../services/apiStore';
 import { 
   Award, 
-  TrendingUp, 
   AlertTriangle, 
   CheckCircle2, 
   Clock, 
-  Layers, 
   ArrowRight
 } from 'lucide-react';
 import { ScoreBadge } from '../common/ScoreBadge';
@@ -23,19 +20,27 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
   onNavigateToDataEntry,
   onNavigateToPicDashboard
 }) => {
+  useSyncExternalStore(pkpStore.subscribe, pkpStore.getSnapshot, pkpStore.getServerSnapshot);
+  const load = pkpStore.getLoadState();
   const indicators = pkpStore.getIndicators();
-  
-  // Calculate scores for selected month
+  let trend: ReturnType<typeof pkpStore.getAnnualTrendData> | undefined;
+  try { trend = pkpStore.getAnnualTrendData(); } catch { /* Analytics may not be loaded yet. */ }
+  const monthlyScore = trend?.monthlyOverallScores[selectedMonth - 1];
+  const totalPKP = typeof monthlyScore === 'number' && Number.isFinite(monthlyScore) ? monthlyScore : null;
+  const kategoriPKP = totalPKP === null ? 'Belum dinilai' : (trend?.monthlyCategories[selectedMonth - 1] ?? 'Belum dinilai');
   const scoredItems = indicators.map(ind => {
     const rec = pkpStore.getMonthlyRecord(ind.id, selectedMonth);
     return {
       klasterId: ind.klasterId,
-      score: rec.nilaiKinerja,
-      isSubmitted: rec.isSubmitted
+      score: !rec.isMissing && typeof rec.nilaiKinerja === 'number' && Number.isFinite(rec.nilaiKinerja) ? rec.nilaiKinerja : null,
+      hasInput: !rec.isMissing && typeof rec.pencapaianRiil === 'number' && Number.isFinite(rec.pencapaianRiil)
     };
   });
 
-  const { klasterAverages, totalPKP, kategoriPKP } = calculateRollup(scoredItems);
+  const klasterAverages: Record<number, number | null> = Object.fromEntries([1, 2, 3, 4, 5].map(id => {
+    const score = trend?.klasters.find(k => k.klasterId === id)?.monthlyScores[selectedMonth - 1];
+    return [id, typeof score === 'number' && Number.isFinite(score) ? score : null];
+  }));
 
   const klasterInfo = [
     { id: 1, name: 'Klaster 1: Manajemen Puskesmas', count: indicators.filter(i => i.klasterId === 1).length, score: klasterAverages[1] },
@@ -45,16 +50,15 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
     { id: 5, name: 'Klaster 5: Dukungan Pelayanan Lintas Klaster', count: indicators.filter(i => i.klasterId === 5).length, score: klasterAverages[5] },
   ];
 
-  // Submission & Provincial Sync metrics
-  const submittedCount = scoredItems.filter(s => s.isSubmitted).length;
-  const submissionRate = Math.round((submittedCount / indicators.length) * 100);
-  const syncedCount = indicators.filter(ind => pkpStore.getMonthlyRecord(ind.id, selectedMonth).syncStatus === 'SYNCED').length;
-  const syncRate = Math.round((syncedCount / indicators.length) * 100);
+  const submittedCount = scoredItems.filter(s => s.hasInput).length;
+  const submissionRate = indicators.length ? `${Math.round((submittedCount / indicators.length) * 100)}%` : '-';
 
   // Distribution
-  const greenCount = scoredItems.filter(s => s.score >= 91).length;
-  const yellowCount = scoredItems.filter(s => s.score >= 81 && s.score < 91).length;
-  const redCount = scoredItems.filter(s => s.score < 81).length;
+  const greenCount = scoredItems.filter(s => s.score !== null && s.score >= 91).length;
+  const yellowCount = scoredItems.filter(s => s.score !== null && s.score >= 81 && s.score < 91).length;
+  const redCount = scoredItems.filter(s => s.score !== null && s.score < 81).length;
+
+  if (load.loading || load.error || !trend) return <div className="bg-white p-6 rounded-xl border border-slate-200 text-slate-600" role={load.error ? 'alert' : 'status'}>{load.error?.message ?? (load.loading ? 'Memuat ringkasan kinerja...' : 'Analitik belum tersedia untuk periode ini.')}</div>;
 
   return (
     <div className="space-y-6">
@@ -74,7 +78,7 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
               Capaian Penilaian Kinerja Puskesmas
             </h2>
             <p className="text-slate-300 text-xs max-w-2xl leading-relaxed">
-              Agregasi rata-rata 5 Klaster ILP sesuai formula resmi Sheet 7 (NILAI KINERJA 2026). Nilai telah dinormalisasi dengan zero-safe handling untuk mencegah eror pembagian.
+              Ringkasan bulanan dari analitik server untuk tahun {pkpStore.getCurrentYear()}. Nilai yang belum tersedia ditampilkan sebagai tanda - dan tidak masuk distribusi kinerja.
             </p>
           </div>
 
@@ -82,10 +86,10 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
             <div className="text-right">
               <p className="text-[11px] text-slate-400 font-medium">Skor Total PKP</p>
               <div className="text-3xl sm:text-4xl font-black font-mono text-emerald-400">
-                {totalPKP}%
+                {totalPKP === null ? '-' : `${totalPKP.toFixed(1)}%`}
               </div>
               <p className={`text-xs font-bold mt-0.5 ${
-                kategoriPKP === 'Kinerja Baik' ? 'text-emerald-400' : kategoriPKP === 'Kinerja Cukup' ? 'text-amber-400' : 'text-rose-400'
+                totalPKP === null ? 'text-slate-400' : kategoriPKP === 'Kinerja Baik' ? 'text-emerald-400' : kategoriPKP === 'Kinerja Cukup' ? 'text-amber-400' : 'text-rose-400'
               }`}>
                 {kategoriPKP}
               </p>
@@ -94,7 +98,7 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
             <div>
               <p className="text-[11px] text-slate-400 font-medium">Progress Input</p>
               <div className="text-2xl sm:text-3xl font-bold font-mono text-white">
-                {submissionRate}%
+                {submissionRate}
               </div>
               <p className="text-[10px] text-slate-400 font-mono">
                 {submittedCount}/{indicators.length} Indikator
@@ -104,10 +108,10 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
             <div className="hidden sm:block">
               <p className="text-[11px] text-slate-400 font-medium">Bridge Provinsi</p>
               <div className="text-2xl sm:text-3xl font-bold font-mono text-cyan-300">
-                {syncRate}%
+                -
               </div>
               <p className="text-[10px] text-slate-400 font-mono">
-                {syncedCount}/{indicators.length} Elemen
+                Integrasi belum tersedia
               </p>
             </div>
           </div>
@@ -193,9 +197,9 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
                   <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
                     <div 
                       className={`h-full rounded-full transition-all ${
-                        k.score >= 91 ? 'bg-emerald-500' : k.score >= 81 ? 'bg-amber-500' : 'bg-rose-500'
+                        k.score === null ? 'bg-slate-300' : k.score >= 91 ? 'bg-emerald-500' : k.score >= 81 ? 'bg-amber-500' : 'bg-rose-500'
                       }`}
-                      style={{ width: `${Math.min(100, k.score)}%` }}
+                      style={{ width: k.score === null ? '0%' : `${Math.max(0, Math.min(100, k.score))}%` }}
                     />
                   </div>
                 </div>
