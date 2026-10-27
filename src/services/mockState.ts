@@ -1,4 +1,5 @@
 import { OFFICIAL_INDICATORS } from '../data/indicators';
+import { compareIndicators } from './indicatorOrder';
 import { 
   PicUser,
   AdminPuskesmasUser, 
@@ -120,9 +121,9 @@ export const INITIAL_PICS: PicUser[] = [
 ];
 
 export const INITIAL_YEARS: YearPeriod[] = [
-  { year: 2025, status: 'LOCKED', cutoffDay: 10, description: 'Tahun Anggaran 2025 (Final Arsip)', isCurrent: false },
-  { year: 2026, status: 'OPEN', cutoffDay: 10, description: 'Tahun Anggaran Berjalan 2026 (ILP Kemenkes)', isCurrent: true },
-  { year: 2027, status: 'DRAFT', cutoffDay: 10, description: 'Perencanaan Target 2027', isCurrent: false }
+  { year: 2025, provinceEnabled: false, status: 'LOCKED', cutoffDay: 10, description: 'Tahun Anggaran 2025 (Final Arsip)', isCurrent: false },
+  { year: 2026, provinceEnabled: false, status: 'OPEN', cutoffDay: 10, description: 'Tahun Anggaran Berjalan 2026 (ILP Kemenkes)', isCurrent: true },
+  { year: 2027, provinceEnabled: false, status: 'DRAFT', cutoffDay: 10, description: 'Perencanaan Target 2027', isCurrent: false }
 ];
 
 export const INITIAL_PUSKESMAS: HealthCenter[] = [
@@ -479,9 +480,8 @@ class PkpDataStore {
   }
 
   // Getters - by default filters out the 10 raw Excel table header artifacts
-  public getIndicators(includeArtifacts = false): OfficialIndicator[] { 
-    if (includeArtifacts) return this.indicators;
-    return this.indicators.filter(ind => !isArtifactRow(ind)); 
+  public getIndicators(includeArtifacts = false): OfficialIndicator[] {
+    return (includeArtifacts ? [...this.indicators] : this.indicators.filter(ind => !isArtifactRow(ind))).sort(compareIndicators);
   }
   public getAllIndicatorsRaw(): OfficialIndicator[] { return this.indicators; }
   public getPics() { return this.pics; }
@@ -1328,6 +1328,7 @@ class PkpDataStore {
     if (this.years.some(y => y.year === year)) return;
     this.years.push({
       year,
+      provinceEnabled: false,
       status: 'OPEN',
       cutoffDay,
       description,

@@ -1,4 +1,5 @@
 import { api, ApiError, type SessionTokens } from './apiClient';
+import { compareIndicators } from './indicatorOrder';
 import type {
   AuthUser, UserRole, OfficialIndicator, PicUser, AdminPuskesmasUser, YearPeriod,
   HealthCenter, AuditLogEntry, IndicatorAnnualTarget, MonthlyRecord,
@@ -27,7 +28,9 @@ type Quarter = 1 | 2 | 3 | 4 | 'ANNUAL';
 type Reload = 'month' | 'targets' | 'assignments' | 'recommendations' | 'users' | 'workflow' | 'all';
 type RecordView = MonthlyRecord & { isMissing: boolean; evidenceId?: string | null };
 type PeriodView = PeriodLockState & { revision: number };
+export interface ActivePeriod { year: number | null; provinceEnabled: boolean; revision: number }
 interface State {
+  activePeriod?: ActivePeriod | null;
   version: number;
   pendingWrites: number;
   user: AuthUser | null;
@@ -176,6 +179,53 @@ class ApiStore {
     }
   }
   getCurrentYear = () => this.state.year;
+  getActivePeriod = () => this.state.activePeriod;
+  isActiveYear = (year = this.state.year) => this.state.activePeriod?.year === year;
+  canInputOwnPeriod = (year = this.state.year) => this.isActiveYear(year) && this.getCurrentUser().role !== 'DINKES_ADMIN' && !!this.state.healthCenterId && this.state.healthCenterId === this.getCurrentUser().healthCenterId;
+  private assertDinkes() {
+    if (this.getCurrentUser().role !== 'DINKES_ADMIN') throw new ApiError(403, 'Hanya Dinkes dapat mengelola periode tahun.');
+  }
+  async fetchActivePeriod() {
+    const epoch = this.generation;
+    try {
+      const activePeriod = await this.read('/master/active-year');
+      if (epoch === this.generation) this.commit({ activePeriod });
+    } catch (error) {
+      if (epoch === this.generation) this.commit({ activePeriod: null });
+      throw error;
+    }
+  }
+  setActivePeriod = (year: number, provinceEnabled: boolean) => {
+    this.assertDinkes();
+    this.assertNoWrites();
+    return this.trackWrite(async epoch => {
+      if (!this.state.activePeriod) throw new Error('Muat ulang periode aktif terlebih dahulu.');
+      try {
+        const activePeriod = await api.request<ActivePeriod>('/master/active-year', { method: 'PUT', body: { year, provinceEnabled, revision: this.state.activePeriod.revision }, signal: this.controller.signal });
+        if (epoch !== this.generation) throw new Error('Sesi telah berubah.');
+        this.commit({ activePeriod });
+        await this.refreshCatalog();
+      } catch (error) {
+        if (epoch === this.generation && error instanceof ApiError && error.status === 409) {
+          await this.fetchActivePeriod();
+          throw new Error('Periode aktif berubah di sesi lain. Status terbaru dimuat; tinjau lalu simpan kembali.');
+        }
+        throw error;
+      }
+    });
+  };
+  runOwnTenantWrite = <T,>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+    const user = this.getCurrentUser();
+    if (user.role !== 'ADMIN_PUSKESMAS' || !user.healthCenterId || user.healthCenterId !== this.state.healthCenterId) {
+      throw new ApiError(403, 'Hanya administrator Puskesmas sendiri yang dapat mengubah integrasi.');
+    }
+    this.assertNoWrites();
+    return this.trackWrite(async epoch => {
+      const result = await operation(this.controller.signal);
+      if (epoch !== this.generation) throw new Error('Lingkup sesi telah berubah.');
+      return result;
+    });
+  };
   getSelectedHealthCenterId = () => this.state.healthCenterId;
   getCurrentHealthCenterId = () => this.state.healthCenterId;
   getSelectedHealthCenter = () => this.state.centers.find(c => c.id === this.state.healthCenterId);
@@ -192,7 +242,7 @@ class ApiStore {
     return { ...row, subdistrict: row.district, headName: row.headName ?? '', picCount: row.picCount ?? 0, currentScore: row.currentScore ?? null, kategoriPKP: row.kategoriPKP ?? null, klasterScores: row.klasterScores ?? {} } as ManagedHealthCenter;
   }
   private yearView(row: Wire): YearPeriod {
-    return { ...row, year: row.year, cutoffDay: row.cutoffDay, status: row.isLocked ? 'LOCKED' : 'OPEN', description: row.description ?? String(row.year), isCurrent: row.year === this.state.year };
+    return { ...row, provinceEnabled: row.provinceEnabled, year: row.year, cutoffDay: row.cutoffDay, status: row.isLocked ? 'LOCKED' : 'OPEN', description: row.description ?? String(row.year), isCurrent: row.year === this.state.year };
   }
   private indicatorView(row: Wire): OfficialIndicator {
     return { ...row, section: row.section && typeof row.section === 'object' ? `${row.section.code}.${row.section.name}` : row.section ?? this.state.sections.find(s => s.code === row.sectionCode)?.name ?? row.sectionCode, klasterName: row.klasterName ?? `Klaster ${row.klasterId}`, formulaKinerjaRaw: row.formulaRaw ?? row.formulaKinerjaRaw } as OfficialIndicator;
@@ -213,16 +263,18 @@ class ApiStore {
     this.flight = null;
     this.commit({ ...emptyScope(), user, healthCenterId: null, load: { loading: true, error: null, scopeKey: '' } });
     try {
-      const [indicators, sections, years, centers] = await Promise.all([
+      const [indicators, sections, years, centers, activePeriod] = await Promise.all([
         this.read('/master/indicators'), this.read('/master/sections'), this.read('/master/years'), this.read('/health-centers'),
+        this.read('/master/active-year'),
       ]);
       if (epoch !== this.generation) return;
       const current = new Date().getFullYear();
       const available = years.map((row: Wire) => row.year as number);
-      const preferredYear = available.includes(current) ? current : Math.max(...available.filter((y: number) => y <= current));
+      const preferredYear = activePeriod.year ?? (available.includes(current) ? current : available[0]);
       const hasYear = Number.isFinite(preferredYear);
       if (!hasYear && user.role !== 'DINKES_ADMIN') throw new Error('Tidak ada tahun pelaporan saat ini atau sebelumnya.');
       const year = hasYear ? preferredYear : current;
+      this.commit({ activePeriod });
       const tenant = user.role === 'DINKES_ADMIN' ? (hasYear ? centers.find((c: Wire) => c.isActive !== false)?.id : undefined) : user.healthCenterId;
       this.commit({ year, sections: sections.filter((s: Wire) => s.isActive !== false).map((s: Wire) => ({ ...s, id: s.code })), indicators: items(indicators).filter(i => i.isActive !== false).map(i => this.indicatorView(i)), years: years.map((y: Wire) => this.yearView({ ...y })), centers: centers.map((c: Wire) => this.centerView(c)), healthCenterId: tenant ?? null, user: { ...this.userView(user), healthCenterName: centers.find((c: Wire) => c.id === user.healthCenterId)?.name } });
       if (!tenant) {
@@ -301,6 +353,8 @@ class ApiStore {
     this.commit({ load: { loading: true, error: null, scopeKey: `${scope.healthCenterId}:${scope.year}` } });
     const work = (async () => {
       try {
+        await this.fetchActivePeriod();
+        if (epoch !== this.generation) return;
         let patch: Partial<State>;
         let revision: number;
         do {
@@ -329,7 +383,7 @@ class ApiStore {
     return work;
   };
 
-  getIndicators = (includeArtifacts = false): OfficialIndicator[] => includeArtifacts ? this.state.indicators : this.cached('indicators', () => this.state.indicators.filter(i => !this.isArtifactRow(i)));
+  getIndicators = (includeArtifacts = false): OfficialIndicator[] => (includeArtifacts ? [...this.state.indicators] : this.state.indicators.filter(i => !this.isArtifactRow(i))).sort(compareIndicators);
   getAllIndicatorsRaw = () => this.state.indicators;
   isArtifactRow = (i: OfficialIndicator) => Boolean(i.isTableArtifact || ['No', '(1)', '(2)', '(3)', 'Kegiatan'].includes(i.no));
   getYears = () => this.cached('years', () => this.state.years.map(y => ({ ...y, isCurrent: y.year === this.state.year })));
@@ -356,6 +410,7 @@ class ApiStore {
     if (epoch !== this.generation) return;
     const [indicators, sections, years, centers, user] = await Promise.all([
       this.read('/master/indicators'), this.read('/master/sections'), this.read('/master/years'), this.read('/health-centers'), this.read('/auth/me'),
+      this.fetchActivePeriod(),
     ]);
     if (epoch !== this.generation) return;
     const availableYears = items(years);
@@ -435,6 +490,10 @@ class ApiStore {
   private async performMutation(path: string, method: string, body: Wire, reload: Reload) {
     const scope = this.scope(body.year ?? this.state.year);
     if (scope.year !== this.state.year) throw new Error('Pilih tahun tersebut sebelum menyimpan.');
+    if (['month', 'targets', 'assignments', 'workflow', 'recommendations'].includes(reload)) {
+      if (!this.isActiveYear(scope.year)) throw new ApiError(409, 'Tahun ini hanya baca. Input hanya tersedia pada tahun aktif yang ditetapkan Dinkes.');
+      if (this.getCurrentUser().role !== 'DINKES_ADMIN' && !this.canInputOwnPeriod(scope.year)) throw new ApiError(403, 'Input hanya untuk Puskesmas sendiri.');
+    }
     const epoch = this.generation;
     const signal = this.controller.signal;
     const result = await api.request<Wire>(path, { method, body: { ...body, healthCenterId: scope.healthCenterId }, signal });
@@ -512,6 +571,7 @@ class ApiStore {
   addFeedback = (sectionCode: string, quarter: number, recommendationText: string) => this.mutate('/recommendations/feedback', 'POST', { year: this.state.year, sectionCode, quarter, recommendationText }, 'recommendations');
 
   uploadEvidence = (file: File, month: number) => this.trackWrite(async epoch => {
+    if (!this.canInputOwnPeriod()) throw new ApiError(409, 'Unggah bukti hanya tersedia untuk Puskesmas sendiri pada tahun aktif.');
     const scope = this.scope();
     const signal = this.controller.signal;
     const signed = await api.request<Wire>('/storage/presigned-upload', { method: 'POST', body: { ...scope, month, filename: file.name, mimeType: file.type, fileSizeBytes: file.size }, signal });
@@ -565,7 +625,7 @@ class ApiStore {
     return result;
   });
   addYearPeriod = (year: number, cutoffDay: number, _description?: string) => this.trackWrite(async epoch => {
-    this.assertMasterAccess();
+    this.assertDinkes();
     const hadYears = this.state.years.length > 0;
     const result = await api.request('/master/years', { method: 'POST', body: { year, cutoffDay }, signal: this.controller.signal });
     if (epoch !== this.generation) throw new Error('Sesi telah berubah.');
@@ -614,7 +674,7 @@ class ApiStore {
     if (this.getCurrentUser().role !== 'DINKES_ADMIN') throw new ApiError(403, 'Hanya Dinkes dapat mengarsipkan Puskesmas.');
     return this.catalogMutation(`/health-centers/${encodeURIComponent(id)}`, 'DELETE');
   };
-  updateYearCutoff = (year: number, cutoffDay: number) => this.catalogMutation(`/master/years/${year}`, 'PATCH', { cutoffDay });
+  updateYearCutoff = (year: number, cutoffDay: number) => { this.assertDinkes(); return this.catalogMutation(`/master/years/${year}`, 'PATCH', { cutoffDay }); };
   deleteYearPeriod = (year: number) => {
     if (this.getCurrentUser().role !== 'DINKES_ADMIN') throw new ApiError(403, 'Hanya Dinkes dapat menghapus tahun.');
     return this.catalogMutation(`/master/years/${year}`, 'DELETE');

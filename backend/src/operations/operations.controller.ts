@@ -1,5 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, UseFilters, UsePipes, ValidationPipe } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ActiveYearDto, ActiveYearResponseDto } from './operations.dto';
 import { Role } from '@prisma/client';
 import { Actor, CurrentActor, Roles } from '../core/auth.decorators';
 import { ActionPlanDto, ArchiveQuery, AssignmentDto, AuditQuery, BulkMonthlyDto, BulkTargetsDto, CreateHealthCenterDto, CreateUserDto, CreateYearDto, FeedbackDto, IdParam, IndicatorQuery, LockYearDto, MonthlyQuery, PaginationQuery, RecommendationQuery, ResetPasswordDto, ReviewWorkflowDto, TenantQuery, UpdateHealthCenterDto, UpdateUserDto, WorkflowDto, YearParam, YearQuery } from './operations.dto';
@@ -24,10 +25,18 @@ export class OperationsController {
   @Get('master/years') @ApiTags('Master')
   years() { return this.operations.years(); }
 
-  @Post('master/years') @Roles(Role.ADMIN_PUSKESMAS, Role.DINKES_ADMIN) @ApiTags('Master')
+  @Get('master/active-year') @ApiTags('Master')
+  @ApiOkResponse({ type: ActiveYearResponseDto })
+  activeYear() { return this.operations.activeYear(); }
+
+  @Put('master/active-year') @Roles(Role.DINKES_ADMIN) @ApiTags('Master')
+  @ApiOkResponse({ type: ActiveYearResponseDto })
+  setActiveYear(@CurrentActor() actor: Actor, @Body() dto: ActiveYearDto) { return this.operations.setActiveYear(actor, dto); }
+
+  @Post('master/years') @Roles(Role.DINKES_ADMIN) @ApiTags('Master')
   createYear(@CurrentActor() actor: Actor, @Body() dto: CreateYearDto) { return this.operations.createYear(actor, dto); }
 
-  @Patch('master/years/:year') @Roles(Role.ADMIN_PUSKESMAS, Role.DINKES_ADMIN) @ApiTags('Master')
+  @Patch('master/years/:year') @Roles(Role.DINKES_ADMIN) @ApiTags('Master')
   setYear(@CurrentActor() actor: Actor, @Param() params: YearParam, @Body() dto: LockYearDto) { return this.operations.setYear(actor, params.year, dto); }
 
   @Delete('master/years/:year') @Roles(Role.DINKES_ADMIN) @ApiTags('Master')

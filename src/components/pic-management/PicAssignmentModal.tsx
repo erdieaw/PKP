@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useSyncExternalStore } from 'react';
 import { pkpStore } from '../../services/apiStore';
+import { compareNumericCodes } from '../../services/indicatorOrder';
 import { 
   UserCheck, 
   Search, 
@@ -18,7 +19,7 @@ export const PicAssignmentView: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const user = pkpStore.getCurrentUser();
   const canAssign = user.role === 'ADMIN_PUSKESMAS' || user.role === 'DINKES_ADMIN';
-  const disabled = pending || pkpStore.getLoadState().loading || !canAssign;
+  const disabled = pending || pkpStore.getLoadState().loading || !canAssign || !pkpStore.isActiveYear();
   const centerId = pkpStore.getSelectedHealthCenterId();
   const year = pkpStore.getCurrentYear();
   useEffect(() => {
@@ -72,7 +73,7 @@ export const PicAssignmentView: React.FC = () => {
   };
 
   // Distinct sub-sections for bulk assignment
-  const subSections = Array.from(new Set(indicators.map(i => i.sectionCode))).sort();
+  const subSections = Array.from(new Set(indicators.map(i => i.sectionCode))).sort(compareNumericCodes);
 
   return (
     <div className="space-y-6">

@@ -4,6 +4,7 @@ import { ApiError } from '../../services/apiClient';
 import { useReportExport } from '../export/useReportExport';
 import { Sheet7OfficialSummary } from '../../types/pkp';
 import { AppLogo } from '../common/AppLogo';
+import { ProcessingIndicator } from '../common/ProcessingIndicator';
 import { 
   FileText, 
   Printer, 
@@ -103,15 +104,15 @@ export const OfficialPerformanceSheet7: React.FC = () => {
     return 'bg-rose-100 text-rose-800 border-rose-300';
   };
 
-  const isLocked = pkpStore.isPeriodLocked(currentYear, periodNum, true);
+  const isLocked = !pkpStore.isActiveYear(currentYear) || pkpStore.isPeriodLocked(currentYear, periodNum, true);
   if (!summaryData) return <div role={pkpStore.getLoadState().error ? 'alert' : 'status'} className="p-6 bg-white rounded-2xl border border-slate-200">{pkpStore.getLoadState().error?.message ?? 'Ringkasan server belum tersedia untuk periode ini.'}</div>;
 
   return (
     <div className="space-y-6">
       {error && <p role="alert" className="p-4 bg-rose-50 text-rose-800 rounded-xl">{error}</p>}
-      {pending && <p role="status">Menyimpan perubahan periode ke server...</p>}
+      {pending && <ProcessingIndicator label="Menyimpan perubahan periode ke server..." description="Tunggu hingga penyimpanan selesai sebelum melanjutkan perubahan periode." />}
       {reportExport.error && <p role="alert" className="p-4 bg-rose-50 text-rose-800 rounded-xl">{reportExport.error}</p>}
-      {reportExport.pending && <p role="status">Server sedang memproses PDF resmi...</p>}
+      {reportExport.pending && <ProcessingIndicator label="Server sedang memproses PDF resmi..." description="Tautan unduhan akan tersedia setelah laporan selesai diproses." />}
       {reportExport.file && <a href={reportExport.file.url} download={reportExport.file.name} target="_blank" rel="noreferrer" className="block p-4 bg-emerald-50 text-emerald-800 rounded-xl underline">Unduh {reportExport.file.name}</a>}
       {/* ===================== NOTIFICATION TOAST ===================== */}
       {notification && (

@@ -1,0 +1,123 @@
+.processing-indicator {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.875rem;
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid #d1e5db;
+  border-radius: 0.75rem;
+  background: #f3f9f5;
+  color: #14543e;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.processing-indicator__orbit {
+  position: relative;
+  flex: 0 0 1.75rem;
+  height: 1.75rem;
+  margin-top: 0.125rem;
+  border: 1px solid #b9d8c8;
+  border-radius: 50%;
+}
+
+.processing-indicator__orbit > span {
+  position: absolute;
+  inset: -1px;
+  border: 2px solid transparent;
+  border-top-color: #28825c;
+  border-radius: inherit;
+  animation: processing-indicator-orbit 2.4s linear infinite;
+}
+
+.processing-indicator__orbit > span::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 50%;
+  background: #28825c;
+}
+
+.processing-indicator__content {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.processing-indicator__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.processing-indicator__label {
+  margin: 0;
+  font-weight: 600;
+}
+
+.processing-indicator__description {
+  margin: 0.25rem 0 0;
+  color: #426354;
+  font-size: 0.8125rem;
+}
+
+.processing-indicator__dots {
+  display: inline-flex;
+  gap: 0.1875rem;
+}
+
+.processing-indicator__dots > span {
+  width: 0.1875rem;
+  height: 0.1875rem;
+  border-radius: 50%;
+  background: #28825c;
+  opacity: 0.5;
+  animation: processing-indicator-dot 1.8s ease-in-out infinite;
+}
+
+.processing-indicator__dots > span:nth-child(2) { animation-delay: 0.2s; }
+.processing-indicator__dots > span:nth-child(3) { animation-delay: 0.4s; }
+
+.processing-indicator__track {
+  height: 0.1875rem;
+  margin-top: 0.75rem;
+  overflow: hidden;
+  border-radius: 1rem;
+  background: #dcebe2;
+}
+
+.processing-indicator__track > span {
+  display: block;
+  width: 35%;
+  height: 100%;
+  border-radius: inherit;
+  background: #408c68;
+  transform: translateX(90%);
+  animation: processing-indicator-slide 2.8s cubic-bezier(0.25, 1, 0.5, 1) infinite;
+}
+
+@keyframes processing-indicator-orbit {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes processing-indicator-slide {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(300%); }
+}
+
+@keyframes processing-indicator-dot {
+  0%, 70%, 100% { opacity: 0.4; transform: translateY(0); }
+  35% { opacity: 1; transform: translateY(-2px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .processing-indicator__orbit > span,
+  .processing-indicator__track > span,
+  .processing-indicator__dots > span {
+    animation: none;
+  }
+}

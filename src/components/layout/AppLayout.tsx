@@ -134,7 +134,7 @@ const ScopedLayout: React.FC<AppLayoutProps> = ({ currentUser, onLogout }) => {
           onLogout={onLogout}
         />
         {notice && <div role="alert" className="px-4 py-3 bg-amber-50 text-amber-900 text-sm flex justify-between gap-2">{notice}<button onClick={() => setNotice('')}>Tutup</button></div>}
-        {globalMode && <div role="status" className="px-4 py-3 bg-emerald-50 text-emerald-900 text-sm">{canManage ? 'Siapkan Puskesmas melalui Pusat Data Master dan buat tahun pelaporan melalui Kelola Periode Tahun. Setelah itu, pilih Puskesmas dan tahun di header untuk membuka data kinerja.' : 'Periode pelaporan belum tersedia. Hubungi Admin Puskesmas untuk menyiapkan periode dan penugasan indikator Anda.'}</div>}
+        {globalMode && <div role="status" className="px-4 py-3 bg-emerald-50 text-emerald-900 text-sm">{userRole === 'DINKES_ADMIN' ? 'Siapkan Puskesmas melalui Pusat Data Master. Buat dan tetapkan tahun aktif melalui Kelola Periode Tahun. Pilihan tahun di header hanya mengubah tampilan data.' : 'Periode pelaporan belum tersedia. Hubungi Dinkes untuk menyiapkan dan menetapkan tahun aktif; penugasan PIC dikelola Puskesmas.'}</div>}
         {showContent && load.error && <div role="alert" className="px-4 py-3 bg-rose-50 text-rose-900 text-sm flex justify-between gap-3"><span>{load.error.message} Data terakhir tetap ditampilkan.</span><button disabled={pkpStore.isMutating()} onClick={retry} className="font-bold shrink-0">Coba Lagi</button></div>}
 
         {/* Scrollable View Container */}
@@ -200,6 +200,7 @@ const ScopedLayout: React.FC<AppLayoutProps> = ({ currentUser, onLogout }) => {
 
             {visibleTab === 'master-data' && canManage && (
               <MasterDataHub 
+                selectedMonth={selectedMonth}
                 isDinkesMode={isDinkesMode}
                 selectedPuskesmasName={selectedPuskesmas}
               />
@@ -221,7 +222,7 @@ const ScopedLayout: React.FC<AppLayoutProps> = ({ currentUser, onLogout }) => {
       )}
 
       {/* Modal: Kelola Periode Tahun & Cutoff */}
-      {showContent && canManage && <YearPeriodModal
+      {showContent && userRole === 'DINKES_ADMIN' && <YearPeriodModal
         isOpen={isYearModalOpen}
         onClose={() => setIsYearModalOpen(false)}
       />}

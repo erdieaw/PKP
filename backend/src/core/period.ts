@@ -1,8 +1,23 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 
+export async function lockPeriodSettings(tx: Prisma.TransactionClient) {
+  const rows = await tx.$queryRaw<{ activeYear: number | null; revision: number }[]>`
+    SELECT "activeYear", "revision" FROM period_settings WHERE id = 1 FOR UPDATE`;
+  if (!rows[0]) throw new ConflictException('Period settings are not configured');
+  return rows[0];
+}
+
+export async function activePeriod(db: Prisma.TransactionClient) {
+  const settings = await db.periodSettings.findUnique({ where: { id: 1 }, include: { period: true } });
+  return { activeYear: settings?.activeYear ?? null, provinceEnabled: settings?.period?.provinceEnabled ?? false,
+    periodRevision: settings?.revision ?? 0 };
+}
+
 export async function lockYear(tx: Prisma.TransactionClient, year: number, allowLocked = false) {
   if (!Number.isInteger(year) || year < 1 || year > 9999) throw new BadRequestException('Invalid year');
+  const settings = await lockPeriodSettings(tx);
+  if (settings.activeYear === null || settings.activeYear !== year) throw new ConflictException('Requested year is not the active year');
   const rows = await tx.$queryRaw<{ year: number; isLocked: boolean; cutoffDay: number }[]>`
     SELECT "year", "isLocked", "cutoffDay" FROM year_periods WHERE year = ${year} FOR UPDATE`;
   const period = rows[0];

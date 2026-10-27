@@ -1,5 +1,6 @@
 import React, { useState, useSyncExternalStore } from 'react';
 import { pkpStore } from '../../services/apiStore';
+import { indicatorDisplayCode } from '../../services/indicatorOrder';
 import { Target, Search, Lock, Unlock, Check, AlertCircle } from 'lucide-react';
 import { PolarityBadge } from '../common/PolarityBadge';
 
@@ -14,7 +15,7 @@ export const TargetSettingView: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   useSyncExternalStore(pkpStore.subscribe, pkpStore.getSnapshot, pkpStore.getServerSnapshot);
   const year = pkpStore.getCurrentYear();
-  const canEdit = (id: string) => !pkpStore.getLoadState().loading && pkpStore.getCurrentUser().role === 'ADMIN_PUSKESMAS' &&
+  const canEdit = (id: string) => pkpStore.canInputOwnPeriod(year) && !pkpStore.getLoadState().loading && pkpStore.getCurrentUser().role === 'ADMIN_PUSKESMAS' &&
     !pkpStore.getAnnualTargets()[id]?.isLocked && !pkpStore.isPeriodLocked(year, 4, true);
 
   const indicators = pkpStore.getIndicators();
@@ -29,7 +30,7 @@ export const TargetSettingView: React.FC = () => {
     if (selectedKlaster !== 0 && ind.klasterId !== selectedKlaster) return false;
     if (search.trim()) {
       const q = search.toLowerCase();
-      const code = `${ind.sectionCode}.${ind.no}`.toLowerCase();
+      const code = indicatorDisplayCode(ind).toLowerCase();
       return (
         code.includes(q) ||
         ind.indikator.toLowerCase().includes(q) ||
@@ -144,7 +145,7 @@ export const TargetSettingView: React.FC = () => {
               {filtered.map((ind) => {
                 const target = annualTargets[ind.id];
                 const isEditing = editingId === ind.id && canEdit(ind.id);
-                const officialCode = `${ind.sectionCode}.${ind.no.replace('.', '')}`;
+                const officialCode = indicatorDisplayCode(ind);
 
                 return (
                   <tr key={ind.id} className="hover:bg-slate-50 transition-colors">

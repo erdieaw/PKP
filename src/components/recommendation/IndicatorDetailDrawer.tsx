@@ -71,7 +71,7 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
     : [];
 
   const user = pkpStore.getCurrentUser();
-  const canEdit = !pkpStore.getLoadState().loading && !isHead && !pkpStore.isPeriodLocked(year, selectedMonth) &&
+  const canEdit = pkpStore.canInputOwnPeriod(year) && !pkpStore.getLoadState().loading && !isHead && !pkpStore.isPeriodLocked(year, selectedMonth) &&
     (user.role === 'ADMIN_PUSKESMAS' || (user.role === 'PIC' && pkpStore.getAssignments()[indicator.id] === user.id));
   const handleSave = async () => {
     if (!canEdit || pending) return;
@@ -221,13 +221,13 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
               <div>
                 <span className="text-slate-400 text-[10px]">Waktu Sinkronisasi Terakhir:</span>
                 <p className="font-mono font-semibold text-slate-200">
-                  {rec.syncedAt ?? '-'}
+                  Belum tersedia
                 </p>
               </div>
               <div>
                 <span className="text-slate-400 text-[10px]">Nomor Batch Transmisi SIPKP:</span>
-                <p className="font-mono text-emerald-300 truncate font-semibold" title={rec.syncBatchId || 'Belum dibuat'}>
-                  {rec.syncBatchId ?? '-'}
+                <p className="font-mono text-slate-300 truncate font-semibold">
+                  Belum tersedia
                 </p>
               </div>
             </div>

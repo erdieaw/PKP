@@ -1,5 +1,6 @@
 import React, { useState, useSyncExternalStore, useEffect } from 'react';
 import { pkpStore } from '../../services/apiStore';
+import { epSyncStatus, lastSyncText } from '../../services/integrationStatus';
 import { 
   Users, 
   CheckCircle2, 
@@ -32,7 +33,7 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
   const indicators = pkpStore.getIndicators();
   const assignments = pkpStore.getAssignments();
   const picId = currentUser.role === 'PIC' ? currentUser.id : pics.some(p => p.id === selectedPicId) ? selectedPicId : 'all';
-  const canEdit = (id: string) => currentUser.role === 'PIC' && assignments[id] === currentUser.id && !pkpStore.isPeriodLocked(currentYear, selectedMonth) && !load.loading && !load.error;
+  const canEdit = (id: string) => pkpStore.canInputOwnPeriod(currentYear) && currentUser.role === 'PIC' && assignments[id] === currentUser.id && !pkpStore.isPeriodLocked(currentYear, selectedMonth) && !load.loading && !load.error;
   useEffect(() => { setEditingIndicatorId(null); setError(null); }, [selectedMonth, currentYear, picId]);
 
   // Filter indicators by PIC
@@ -99,7 +100,7 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
   };
 
   if (currentUser.role === 'PIC') {
-    const locked = pkpStore.isPeriodLocked(currentYear, selectedMonth);
+    const locked = !pkpStore.canInputOwnPeriod(currentYear) || pkpStore.isPeriodLocked(currentYear, selectedMonth);
     const visibleItems = itemsWithRecord.filter(({ record }) => {
       const filled = !record.isMissing && typeof record.pencapaianRiil === 'number' && Number.isFinite(record.pencapaianRiil);
       return inputFilter === 'all' || (inputFilter === 'filled' ? filled : !filled);
@@ -380,17 +381,8 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
 
                     {/* Status Sinkronisasi Provinsi */}
                     <td className="py-2.5 px-3 text-center align-top">
-                      {record.syncStatus === 'SYNCED' ? (
-                        <span 
-                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold"
-                          title={record.syncedAt ? `Tersinkron ke server SIPKP Provinsi (${record.syncedAt})` : 'Status sinkron dari server'}
-                        >
-                          <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                          <span>Tersinkron</span>
-                        </span>
-                      ) : (
-                        <span className="text-[10px] text-slate-500" title="Backend belum menyediakan operasi sinkronisasi provinsi">Integrasi belum tersedia</span>
-                      )}
+                      <span className="text-[10px] text-slate-600">{epSyncStatus(record.syncStatus)}</span>
+                      <p className="mt-1 text-[10px] text-slate-500">{lastSyncText}</p>
                     </td>
 
                     {/* Action buttons */}

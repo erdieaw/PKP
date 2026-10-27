@@ -74,6 +74,8 @@ test('real master management: global catalogue, tenant administration and passwo
     let p = await login(picA.username, password);
     let pb = await login(picB.username, password);
     const d = await login(dinkes.username, password);
+    const period = await request<{ revision: number }>('GET', '/master/active-year', 200, d.accessToken);
+    await request('PUT', '/master/active-year', 200, d.accessToken, { year: 2026, provinceEnabled: false, revision: period.revision });
     baseline = (await request<Catalogue>('GET', '/master/indicators', 200, a.accessToken)).total;
     const snapshots = await db.periodLock.findMany({ where: { status: { in: ['SUBMITTED', 'VERIFIED'] } }, select: { id: true, snapshot: true }, orderBy: { id: 'asc' } });
     const year = await db.yearPeriod.findUniqueOrThrow({ where: { year: 2026 } });
@@ -186,15 +188,17 @@ test('real master management: global catalogue, tenant administration and passwo
       await request('DELETE', `/master/sections/${code}`, 200, a.accessToken);
     });
 
-    await t.test('year CRUD distinguishes cutoff editing, DINKES locking and referenced deletion', async () => {
+    await t.test('year CRUD is DINKES-only, including cutoff editing and deletion', async () => {
       const existing = new Set((await db.yearPeriod.findMany({ select: { year: true } })).map(item => item.year));
       const start = randomInt(20);
       const unused = Array.from({ length: 20 }, (_, index) => 2040 + (start + index) % 20).find(candidate => !existing.has(candidate));
       assert.ok(unused, 'An unused year in 2040-2059 is required');
-      await request('POST', '/master/years', 201, a.accessToken, { year: unused, cutoffDay: 10 });
-      await request('PATCH', `/master/years/${unused}`, 200, a.accessToken, { cutoffDay: 15 });
+      await request('POST', '/master/years', 403, a.accessToken, { year: unused, cutoffDay: 10 });
+      await request('POST', '/master/years', 201, d.accessToken, { year: unused, cutoffDay: 10 });
+      await request('PATCH', `/master/years/${unused}`, 403, a.accessToken, { cutoffDay: 15 });
+      await request('PATCH', `/master/years/${unused}`, 200, d.accessToken, { cutoffDay: 15 });
       await request('PATCH', `/master/years/${unused}`, 403, a.accessToken, { isLocked: true });
-      await request('PATCH', `/master/years/${unused}`, 400, a.accessToken, { cutoffDay: null });
+      await request('PATCH', `/master/years/${unused}`, 400, d.accessToken, { cutoffDay: null });
       await request('PATCH', `/master/years/${unused}`, 400, d.accessToken, { isLocked: null });
       await request('PATCH', `/master/years/${unused}`, 200, d.accessToken, { isLocked: true });
       const years = await request<{ year: number; cutoffDay: number; isLocked: boolean }[]>('GET', '/master/years', 200, p.accessToken);

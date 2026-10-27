@@ -66,8 +66,9 @@ export function Header({ selectedMonth, onSelectMonth, selectedPuskesmas, onSele
             {years.length === 0 && <option value="">Belum ada tahun</option>}
             {years.map(period => <option key={period.year} value={period.year}>{period.year}{period.status === 'LOCKED' ? ' (Terkunci)' : ''}</option>)}
           </select>
-          {canManage && <button type="button" disabled={busy || pending} onClick={onOpenYearModal} aria-label="Kelola periode tahun" className="p-1 hover:bg-slate-200 rounded text-slate-500"><Settings2 className="w-3.5 h-3.5" /></button>}
+          {user.role === 'DINKES_ADMIN' && <button type="button" disabled={busy || pending} onClick={onOpenYearModal} aria-label="Kelola periode tahun" className="p-1 hover:bg-slate-200 rounded text-slate-500"><Settings2 className="w-3.5 h-3.5" /></button>}
         </div>
+        <span role="status" className="text-xs text-slate-600">{pkpStore.isActiveYear(year) ? 'Tahun aktif' : pkpStore.getActivePeriod()?.year == null ? 'Hanya baca: tahun aktif belum ditetapkan' : `Hanya baca: tahun aktif ${pkpStore.getActivePeriod()?.year}`}</span>
         <select aria-label="Bulan evaluasi" value={selectedMonth} disabled={busy || pending || globalMode} onChange={event => onSelectMonth(Number(event.target.value))} className="text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg px-2 py-1.5 focus:ring-2 focus:ring-emerald-500 max-w-[120px]">
           {Array.from({ length: 12 }, (_, index) => <option key={index + 1} value={index + 1}>{new Intl.DateTimeFormat('id-ID', { month: 'long' }).format(new Date(2024, index, 1))}</option>)}
         </select>

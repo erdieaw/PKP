@@ -13,7 +13,7 @@ import { getConfig } from '../config';
 import { Actor } from '../core/auth.decorators';
 import { audit } from '../core/audit';
 import { DbService } from '../core/db.service';
-import { assertWritable, lockYear } from '../core/period';
+import { activePeriod, assertWritable, lockYear } from '../core/period';
 import { RedisService } from '../core/redis.service';
 import { requireRoles, tenantFor } from '../core/tenant';
 import { DownloadDto, UploadDto } from './integrations.dto';
@@ -157,14 +157,17 @@ export class IntegrationService implements OnModuleDestroy {
     } catch { throw new ServiceUnavailableException({ status: 'not_ready' }); }
   }
 
-  bridgeStatus(actor: Actor, requested?: string) {
+  async bridgeStatus(actor: Actor, requested?: string) {
     requireRoles(actor, Role.ADMIN_PUSKESMAS, Role.DINKES_ADMIN);
     const healthCenterId = tenantFor(actor, requested);
-    return { healthCenterId, status: 'CONFIGURATION_REQUIRED', enabled: false, reason: 'Official provincial contract not provided' };
+    const period = await activePeriod(this.db);
+    return { healthCenterId, ...period, readOnly: true, canWrite: false,
+      status: period.provinceEnabled ? 'READ_ONLY' : 'DISABLED', enabled: period.provinceEnabled,
+      reason: 'Province writes are unavailable; read-only integration only' };
   }
 
-  bridgeSync(actor: Actor, requested?: string): never {
-    const status = this.bridgeStatus(actor, requested);
+  async bridgeSync(actor: Actor, requested?: string): Promise<never> {
+    const status = await this.bridgeStatus(actor, requested);
     throw new ServiceUnavailableException({ ...status, message: status.reason });
   }
 }

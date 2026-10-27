@@ -5,7 +5,8 @@ import { calculateScore } from '../analytics/scoring';
 import { Actor } from '../core/auth.decorators';
 import { audit } from '../core/audit';
 import { DbService } from '../core/db.service';
-import { assertWritable, lockYear } from '../core/period';
+import { activePeriod, assertWritable, lockPeriodSettings, lockYear } from '../core/period';
+import { ActiveYearDto } from './operations.dto';
 import { requireRoles, tenantFor } from '../core/tenant';
 import { ActionPlanDto, ArchiveQuery, AssignmentDto, AuditQuery, BulkMonthlyDto, BulkTargetsDto, CreateHealthCenterDto, CreateUserDto, CreateYearDto, FeedbackDto, IndicatorQuery, LockYearDto, MonthlyQuery, PaginationQuery, RecommendationQuery, ResetPasswordDto, UpdateHealthCenterDto, UpdateUserDto, WorkflowDto, YearQuery } from './operations.dto';
 
@@ -44,6 +45,25 @@ export class OperationsService {
   }
   years() { return this.db.yearPeriod.findMany({ orderBy: { year: 'desc' } }); }
 
+  async activeYear() {
+    const state = await activePeriod(this.db);
+    return { year: state.activeYear, provinceEnabled: state.provinceEnabled, revision: state.periodRevision };
+  }
+
+  async setActiveYear(actor: Actor, dto: ActiveYearDto) {
+    requireRoles(actor, Role.DINKES_ADMIN);
+    return this.db.$transaction(async tx => {
+      const settings = await lockPeriodSettings(tx);
+      if (settings.revision !== dto.revision) throw new ConflictException('Period settings revision changed');
+      const rows = await tx.$queryRaw<{ year: number }[]>`SELECT year FROM year_periods WHERE year = ${dto.year} FOR UPDATE`;
+      if (!rows.length) throw new NotFoundException('Year period not found');
+      await tx.yearPeriod.update({ where: { year: dto.year }, data: { provinceEnabled: dto.provinceEnabled } });
+      const updated = await tx.periodSettings.update({ where: { id: 1 }, data: { activeYear: dto.year, revision: { increment: 1 } } });
+      await audit(tx, actor, null, 'ACTIVE_YEAR_UPDATED', { previousYear: settings.activeYear, ...dto });
+      return { year: updated.activeYear, provinceEnabled: dto.provinceEnabled, revision: updated.revision };
+    });
+  }
+
   healthCenters(actor: Actor, requested?: string) {
     const id = actor.role === Role.DINKES_ADMIN && requested === undefined ? undefined : tenantFor(actor, requested);
     return this.db.healthCenter.findMany({ where: { id }, orderBy: { name: 'asc' } });
@@ -59,7 +79,7 @@ export class OperationsService {
   }
 
   createYear(actor: Actor, dto: CreateYearDto) {
-    requireRoles(actor, Role.ADMIN_PUSKESMAS, Role.DINKES_ADMIN);
+    requireRoles(actor, Role.DINKES_ADMIN);
     return this.db.$transaction(async tx => {
       const year = await tx.yearPeriod.create({ data: dto });
       await audit(tx, actor, null, 'YEAR_CREATED', { year: dto.year });
@@ -68,12 +88,15 @@ export class OperationsService {
   }
 
   setYear(actor: Actor, year: number, dto: LockYearDto) {
-    requireRoles(actor, Role.ADMIN_PUSKESMAS, Role.DINKES_ADMIN);
+    requireRoles(actor, Role.DINKES_ADMIN);
     const { isLocked, cutoffDay } = dto;
     if (isLocked !== undefined) requireRoles(actor, Role.DINKES_ADMIN);
     if (isLocked === undefined && cutoffDay === undefined) throw new BadRequestException('At least one editable field is required');
     return this.db.$transaction(async tx => {
-      const previous = await lockYear(tx, year, true);
+      await lockPeriodSettings(tx);
+      const rows = await tx.$queryRaw<{ isLocked: boolean; cutoffDay: number }[]>`SELECT "isLocked", "cutoffDay" FROM year_periods WHERE year = ${year} FOR UPDATE`;
+      const previous = rows[0];
+      if (!previous) throw new NotFoundException('Year period not found');
       const updated = await tx.yearPeriod.update({ where: { year }, data: { isLocked, cutoffDay } });
       if (isLocked !== undefined) await audit(tx, actor, null, isLocked ? 'YEAR_LOCKED' : 'YEAR_UNLOCKED', { year, previousIsLocked: previous.isLocked });
       if (cutoffDay !== undefined) await audit(tx, actor, null, 'YEAR_UPDATED', { year, previousCutoffDay: previous.cutoffDay, cutoffDay });
@@ -84,7 +107,10 @@ export class OperationsService {
   deleteYear(actor: Actor, year: number) {
     requireRoles(actor, Role.DINKES_ADMIN);
     return this.db.$transaction(async tx => {
-      await lockYear(tx, year, true);
+      const settings = await lockPeriodSettings(tx);
+      if (settings.activeYear === year) throw new ConflictException('Active year cannot be deleted');
+      const rows = await tx.$queryRaw<{ year: number }[]>`SELECT year FROM year_periods WHERE year = ${year} FOR UPDATE`;
+      if (!rows.length) throw new NotFoundException('Year period not found');
       const references = await Promise.all([
         tx.annualTarget.count({ where: { year } }), tx.picAssignment.count({ where: { year } }),
         tx.monthlyRecord.count({ where: { year } }), tx.periodLock.count({ where: { year } }),

@@ -1,6 +1,8 @@
 import React, { useState, useSyncExternalStore } from 'react';
 import { pkpStore } from '../../services/apiStore';
 import { ApiError } from '../../services/apiClient';
+import { epSyncStatus, lastSyncText } from '../../services/integrationStatus';
+import { indicatorDisplayCode } from '../../services/indicatorOrder';
 import { OfficialIndicator, KlasterId, Sheet7OfficialSummary } from '../../types/pkp';
 import { 
   Search, 
@@ -49,7 +51,6 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
   const [toast, setToast] = useState<string | null>(null);
   const isSyncingAll = false;
-  const syncingId = null;
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useSyncExternalStore(pkpStore.subscribe, pkpStore.getSnapshot, pkpStore.getServerSnapshot);
@@ -80,16 +81,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
     return ind.no === 'No' || ind.no === '(1)' || ind.no === '(2)' || ind.no === '(3)' || ind.no === 'Kegiatan';
   };
 
-  const validIndicators = indicators.filter(ind => !isArtifactRow(ind));
 
-  // Sync statistics
-  const syncedCountAll = validIndicators.filter(ind => {
-    const rec = isQuarterMode 
-      ? pkpStore.getQuarterlyRecord(ind.id, selectedQuarter)
-      : pkpStore.getMonthlyRecord(ind.id, selectedMonth);
-    return rec.syncStatus === 'SYNCED';
-  }).length;
-  const syncCoveragePct = validIndicators.length > 0 ? Math.round((syncedCountAll / validIndicators.length) * 100) : 0;
 
   // Filter indicators
   const filtered = indicators.filter((ind) => {
@@ -99,7 +91,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
     }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      const code = `${ind.sectionCode}.${ind.no}`.toLowerCase();
+      const code = indicatorDisplayCode(ind).toLowerCase();
       return (
         code.includes(q) ||
         ind.indikator.toLowerCase().includes(q) ||
@@ -131,8 +123,9 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
     setCollapsedSections(prev => ({ ...prev, [sectionCode]: !prev[sectionCode] }));
   };
 
-  const isLocked = pkpStore.isPeriodLocked(currentYear, activePeriodNum, isQuarterMode);
-  const canEdit = (id: string) => !pkpStore.getLoadState().loading && !isQuarterMode && !pkpStore.isPeriodLocked(currentYear, selectedMonth) &&
+  const isLocked = !pkpStore.isActiveYear(currentYear) || pkpStore.isPeriodLocked(currentYear, activePeriodNum, isQuarterMode);
+  const canManageWorkflow = isDinkes && pkpStore.isActiveYear(currentYear) && !pkpStore.getLoadState().loading;
+  const canEdit = (id: string) => pkpStore.canInputOwnPeriod(currentYear) && !pkpStore.getLoadState().loading && !isQuarterMode && !pkpStore.isPeriodLocked(currentYear, selectedMonth) &&
     (currentUser.role === 'ADMIN_PUSKESMAS' || (currentUser.role === 'PIC' && pkpStore.getAssignments()[id] === currentUser.id));
 
   // Realisasi Edit Handlers
@@ -194,7 +187,6 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
     onOpenDrawer(headIndicator);
   };
 
-  const handleSyncSingle = (_id: string, _code: string) => setError('Integrasi SIPKP Provinsi belum tersedia.');
   const handleSyncAll = () => setError('Integrasi SIPKP Provinsi belum tersedia.');
 
   // Workflow Handlers
@@ -219,20 +211,20 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
   };
 
   const handleVerifyByDinkes = async () => {
-    if (!isDinkes || !await runWorkflow(() => pkpStore.verifyAndLockPeriod(currentYear, activePeriodNum, isQuarterMode))) return;
+    if (!canManageWorkflow || !await runWorkflow(() => pkpStore.verifyAndLockPeriod(currentYear, activePeriodNum, isQuarterMode))) return;
     showToast(`Laporan ${isQuarterMode ? `Triwulan ${selectedQuarter}` : `Bulan ke-${selectedMonth}`} DIVERIFIKASI & DIKUNCI secara resmi.`);
   };
 
   const handleRequestRevision = async () => {
     if (!revisionNoteInput.trim()) return;
-    if (!isDinkes || !await runWorkflow(cascade => pkpStore.requestRevisionPeriod(currentYear, activePeriodNum, isQuarterMode, revisionNoteInput.trim(), undefined, cascade))) return;
+    if (!canManageWorkflow || !await runWorkflow(cascade => pkpStore.requestRevisionPeriod(currentYear, activePeriodNum, isQuarterMode, revisionNoteInput.trim(), undefined, cascade))) return;
     setShowRevisionModal(false);
     setRevisionNoteInput('');
     showToast('Catatan revisi telah dikirimkan ke Puskesmas.');
   };
 
   const handleUnlockForEdit = async () => {
-    if (!isDinkes || pending) return;
+    if (!canManageWorkflow || pending) return;
     const reason = window.prompt('Alasan membuka kunci revisi (wajib):');
     if (!reason?.trim()) return;
     if (!await runWorkflow(cascade => pkpStore.unlockPeriodForEdit(currentYear, activePeriodNum, isQuarterMode, undefined, reason.trim(), cascade))) return;
@@ -348,7 +340,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
           {isDinkes && (
             <button
               onClick={handleUnlockForEdit}
-              disabled={pending}
+              disabled={pending || !canManageWorkflow}
               className="px-3 py-1.5 rounded-lg bg-white border border-emerald-300 hover:bg-emerald-100 text-emerald-800 text-xs font-bold flex items-center gap-1.5 transition-all self-start md:self-auto"
             >
               <Unlock className="w-3.5 h-3.5 text-emerald-700" />
@@ -382,14 +374,15 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
           {isDinkes ? (
             <div className="flex items-center gap-2 self-start md:self-auto">
               <button
-                onClick={() => setShowRevisionModal(true)}
+                onClick={() => { if (canManageWorkflow && !pending) setShowRevisionModal(true); }}
+                disabled={pending || !canManageWorkflow}
                 className="px-3 py-1 rounded-lg bg-white border border-rose-300 text-rose-700 hover:bg-rose-50 text-xs font-bold"
               >
                 Minta Revisi
               </button>
               <button
                 onClick={handleVerifyByDinkes}
-                disabled={pending}
+                disabled={pending || !canManageWorkflow}
                 className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs"
               >
                 <CheckCircle2 className="w-3.5 h-3.5" />
@@ -482,12 +475,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
             <div className="text-[10px] text-slate-300 font-mono mb-1 font-bold">
               Integrasi belum tersedia
             </div>
-            <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-              <div 
-                className="bg-emerald-400 h-full rounded-full transition-all duration-500" 
-                style={{ width: `${syncCoveragePct}%` }}
-              />
-            </div>
+            <p className="text-[10px] text-slate-300">{lastSyncText}</p>
           </div>
 
           <button
@@ -657,14 +645,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
                       </td>
 
                       <td className="py-2.5 px-3 text-center align-middle">
-                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                          agg.syncedCount === agg.childCount
-                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                            : 'bg-amber-50 text-amber-800 border-amber-300'
-                        }`}>
-                          <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                           <span>Integrasi belum tersedia</span>
-                        </span>
+                        <span className="text-[10px] text-slate-500">Integrasi belum tersedia</span>
                       </td>
                     </tr>
 
@@ -682,8 +663,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
 
                       const pic = pkpStore.getPicForIndicator(ind.id);
                       const isEditing = editingId === ind.id && canEdit(ind.id);
-                      const officialCode = `${ind.sectionCode}.${ind.no.replace('.', '')}`;
-                      const isElementSyncing = syncingId === ind.id;
+                      const officialCode = indicatorDisplayCode(ind);
 
                       return (
                         <tr 
@@ -812,22 +792,8 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
 
                           {/* Sinkronisasi Jatim */}
                           <td className="py-2 px-2.5 text-center align-middle" onClick={(e) => e.stopPropagation()}>
-                            {rec.syncStatus === 'SYNCED' ? (
-                              <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold" title={`Tersinkron (${rec.syncedAt || 'OK'})`}>
-                                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                                <span>Tersinkron</span>
-                              </div>
-                            ) : (
-                              <button
-                                onClick={() => handleSyncSingle(ind.id, officialCode)}
-                                disabled
-                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-bold transition-all shadow-2xs hover:scale-102"
-                                title="Klik untuk sinkronkan elemen ini ke server provinsi"
-                              >
-                                <RefreshCw className={`w-3 h-3 text-amber-600 ${isElementSyncing ? 'animate-spin' : ''}`} />
-                                <span>Integrasi belum tersedia</span>
-                              </button>
-                            )}
+                            <span className="text-[10px] font-semibold text-slate-600">{epSyncStatus(rec.syncStatus)}</span>
+                            <p className="mt-1 text-[10px] text-slate-500">{lastSyncText}</p>
                           </td>
                         </tr>
                       );
@@ -908,7 +874,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
               </button>
               <button
                 onClick={handleRequestRevision}
-                disabled={pending || !revisionNoteInput.trim()}
+                disabled={pending || !canManageWorkflow || !revisionNoteInput.trim()}
                 className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-bold shadow-sm"
               >
                 Kirim Catatan Revisi

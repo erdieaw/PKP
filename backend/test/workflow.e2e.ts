@@ -56,6 +56,8 @@ test('workflow: repeated target locks, transitive cascade, revision history and 
       assert.equal(response.status, expected, `${method} ${path}: ${text}`);
       return (JSON.parse(text) as { data: T }).data;
     }
+    const period = await request<{ revision: number }>('GET', '/master/active-year', 200, dinkes.token);
+    await request('PUT', '/master/active-year', 200, dinkes.token, { year, provinceEnabled: false, revision: period.revision });
     const catalogue = await db.indicator.findMany({ where: { isActive: true }, orderBy: { id: 'asc' } });
     assert.ok(catalogue.length > 100, 'Snapshots must exercise history beyond audit truncation limits');
     const defaults = await request<{ items: { indicatorId: string; targetPct: string; rawTargetNumeric: string }[] }>('GET', `/targets/annual/${year}`, 200, admin.token);

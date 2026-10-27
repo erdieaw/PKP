@@ -60,6 +60,18 @@ export class CreateYearDto extends YearParam {
   @ApiPropertyOptional({ default: 10 }) @Optional() @Type(() => Number) @IsInt() @Min(1) @Max(31) cutoffDay?: number;
 }
 
+export class ActiveYearDto {
+  @ApiProperty({ minimum: 1, maximum: 9999 }) @IsInt() @Min(1) @Max(9999) year!: number;
+  @ApiProperty() @IsBoolean() provinceEnabled!: boolean;
+  @ApiProperty({ minimum: 0 }) @IsInt() @Min(0) @Max(2147483646) revision!: number;
+}
+
+export class ActiveYearResponseDto {
+  @ApiProperty({ type: Number, nullable: true }) year!: number | null;
+  @ApiProperty() provinceEnabled!: boolean;
+  @ApiProperty() revision!: number;
+}
+
 export class LockYearDto {
   @ApiPropertyOptional() @Optional() @IsBoolean() isLocked?: boolean;
   @ApiPropertyOptional() @Optional() @Type(() => Number) @IsInt() @Min(1) @Max(31) cutoffDay?: number;

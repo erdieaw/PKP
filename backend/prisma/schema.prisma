@@ -68,6 +68,8 @@ model HealthCenter {
   recommendations Recommendation[]
   auditLogs       AuditLog[]
   exportJobs      ExportJob[]
+  provinceConfig  ProvinceConfig?
+  provinceMappings ProvinceMapping[]
 
   @@map("health_centers")
 }
@@ -114,6 +116,8 @@ model Session {
 
 model YearPeriod {
   year            Int              @id
+  provinceEnabled Boolean          @default(false)
+  activeSettings  PeriodSettings?
   cutoffDay       Int              @default(10)
   isLocked        Boolean          @default(false)
   createdAt       DateTime         @default(now())
@@ -125,6 +129,15 @@ model YearPeriod {
   recommendations Recommendation[]
 
   @@map("year_periods")
+}
+
+model PeriodSettings {
+  id         Int         @id @default(1)
+  activeYear Int?        @unique
+  period     YearPeriod? @relation(fields: [activeYear], references: [year], onDelete: Restrict)
+  revision   Int         @default(0)
+
+  @@map("period_settings")
 }
 
 model Section {
@@ -166,6 +179,7 @@ model Indicator {
   annualTargets        AnnualTarget[]
   picAssignments       PicAssignment[]
   monthlyRecords       MonthlyRecord[]
+  provinceMappings     ProvinceMapping[]
 
   @@index([sectionCode, isActive])
   @@map("indicators")
@@ -347,4 +361,28 @@ model ExportJob {
   @@index([userId])
   @@index([status, createdAt])
   @@map("export_jobs")
+}
+
+model ProvinceConfig {
+  healthCenterId String @id @db.Uuid
+  healthCenter HealthCenter @relation(fields: [healthCenterId], references: [id], onDelete: Restrict)
+  username String
+  passwordEncrypted String
+  provinceHealthCenterCode String
+  revision Int @default(1)
+  updatedAt DateTime @updatedAt
+
+  @@map("province_configs")
+}
+
+model ProvinceMapping {
+  healthCenterId String @db.Uuid
+  healthCenter HealthCenter @relation(fields: [healthCenterId], references: [id], onDelete: Restrict)
+  indicatorId String
+  indicator Indicator @relation(fields: [indicatorId], references: [id], onDelete: Restrict)
+  provinceCode String
+
+  @@id([healthCenterId, indicatorId])
+  @@unique([healthCenterId, provinceCode])
+  @@map("province_mappings")
 }

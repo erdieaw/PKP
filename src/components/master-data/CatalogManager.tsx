@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useSyncExternalStore } from 'react';
 import { pkpStore, type MasterIndicator, type SubKlasterMaster } from '../../services/apiStore';
 import { ApiError } from '../../services/apiClient';
+import { compareIndicators, compareNumericCodes } from '../../services/indicatorOrder';
 
 const input = 'w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white';
 const button = 'px-3 py-2 border rounded-lg text-xs font-semibold disabled:opacity-50';
@@ -28,8 +29,8 @@ export function CatalogManager({ kind }: { kind: 'indicators' | 'subklasters' })
   }, [kind]);
   if (pkpStore.getCurrentUser().role === 'PIC') return null;
   const isIndicator = kind === 'indicators';
-  const sections = pkpStore.getMasterSections();
-  const rows = isIndicator ? pkpStore.getMasterIndicators() : sections;
+  const sections = [...pkpStore.getMasterSections()].sort((a, b) => compareNumericCodes(a.code, b.code) || a.id.localeCompare(b.id));
+  const rows = isIndicator ? [...pkpStore.getMasterIndicators()].sort(compareIndicators) : sections;
   const disabled = pending || loading || pkpStore.isMutating() || pkpStore.getLoadState().loading;
   const run = async (action: () => Promise<unknown>) => {
     if (disabled) return;

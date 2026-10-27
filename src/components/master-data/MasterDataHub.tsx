@@ -4,9 +4,11 @@ import type { AdminPuskesmasUser, PicUser } from '../../types/pkp';
 import { Database, Layers, Building2, Users, History, Plus, Edit2, X, CheckCircle2, ShieldCheck } from 'lucide-react';
 import { CatalogManager } from './CatalogManager';
 import { ResetPasswordDialog } from './ResetPasswordDialog';
+import { ProvinceIntegrationPanel } from './ProvinceIntegrationPanel';
 
-type MasterTab = 'indicators' | 'subklasters' | 'puskesmas' | 'users' | 'audit-logs';
+type MasterTab = 'indicators' | 'subklasters' | 'puskesmas' | 'users' | 'audit-logs' | 'province';
 interface MasterDataHubProps {
+  selectedMonth: number;
   isDinkesMode?: boolean;
   selectedPuskesmasName?: string;
 }
@@ -15,7 +17,7 @@ const emptyCenter = { name: '', code: '', district: '', headName: '', address: '
 const inputClass = 'mt-1 w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-emerald-500';
 const buttonClass = 'inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold disabled:opacity-50';
 
-export const MasterDataHub: React.FC<MasterDataHubProps> = () => {
+export const MasterDataHub: React.FC<MasterDataHubProps> = ({ selectedMonth }) => {
   useSyncExternalStore(pkpStore.subscribe, pkpStore.getSnapshot, pkpStore.getServerSnapshot);
   const user = pkpStore.getCurrentUser();
   const isDinkes = user.role === 'DINKES_ADMIN';
@@ -117,9 +119,11 @@ export const MasterDataHub: React.FC<MasterDataHubProps> = () => {
         ['users', 'Master Pengguna & Staf PIC', Users],
         ['audit-logs', 'Log Audit & Aktivitas', History],
       ] as const).map(([id, label, Icon]) => <button key={id} disabled={pending} onClick={() => setActiveTab(id)} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap ${activeTab === id ? 'bg-slate-900 text-white' : 'bg-white text-slate-600 border border-slate-200'}`}><Icon className="w-3.5 h-3.5" />{label}</button>)}
+      {canManagePics && <button disabled={disabled} onClick={() => setActiveTab('province')} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap ${activeTab === 'province' ? 'bg-slate-900 text-white' : 'bg-white text-slate-600 border border-slate-200'}`}>Integrasi Provinsi</button>}
     </div>
 
     {(activeTab === 'indicators' || activeTab === 'subklasters') && <CatalogManager kind={activeTab} />}
+    {activeTab === 'province' && canManagePics && <ProvinceIntegrationPanel key={`${user.id}:${centerId}:${pkpStore.getActivePeriod()?.revision}:${selectedMonth}`} selectedMonth={selectedMonth} />}
     {activeTab === 'puskesmas' && <div className="space-y-4">
       <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-wrap items-center justify-between gap-3"><div><h3 className="font-bold text-sm text-slate-800">Daftar Fasilitas Pelayanan Kesehatan</h3><p className="text-xs text-slate-500">Arsip mempertahankan data dan audit, serta mencabut seluruh sesi Puskesmas.</p></div>{isDinkes && <button disabled={disabled} onClick={() => { setEditingCenter(null); setCenter({ ...emptyCenter }); setError(null); setModal('center'); }} className={buttonClass}><Plus className="w-3.5 h-3.5" />Tambah Puskesmas</button>}</div>
       <div className="space-y-2">{centers.map(c => <div key={c.id} className="p-3 bg-white border rounded-lg flex flex-wrap items-center gap-3"><span className="font-semibold">{c.name}</span><span className="text-xs">{c.isActive === false ? 'Arsip' : 'Aktif'}</span>{(isDinkes || c.id === user.healthCenterId) && <button className="text-xs underline" disabled={disabled} onClick={() => { setEditingCenter(c); setCenter({ name: c.name, code: c.code, district: c.subdistrict, headName: c.headName ?? '', address: c.address ?? '' }); setModal('center'); }}>Ubah Profil</button>}{isDinkes && <button className="text-xs underline" disabled={disabled} onClick={() => { if (window.confirm(c.isActive === false ? `Pulihkan ${c.name}?` : `Arsipkan ${c.name}? Seluruh sesi pengguna Puskesmas ini dicabut. Data dan audit tetap disimpan.`)) void run(() => c.isActive === false ? pkpStore.updatePuskesmas(c.id, { isActive: true }) : pkpStore.deletePuskesmas(c.id), 'Status Puskesmas diperbarui.'); }}>{c.isActive === false ? 'Pulihkan' : 'Arsipkan'}</button>}</div>)}</div>

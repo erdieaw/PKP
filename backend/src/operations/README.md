@@ -35,10 +35,11 @@ explicit user requirement.
 
 Dinkes alone creates/archives centers; admins may edit their own center profile.
 DELETE `/health-centers/:id` sets `isActive:false`, preserves history and revokes
-tenant sessions. Both administrator roles create years/edit cutoff (use1..28);
-only Dinkes locks/unlocks or deletes years. DELETE `/master/years/:year` returns409
+tenant sessions. Only Dinkes creates years, edits cutoff, locks/unlocks, deletes,
+or selects the active year. See [active period contract](../../ACTIVE_PERIOD.md).
+DELETE `/master/years/:year` returns409 for the active year or
 if targets, assignments, records, periods, recommendations, uploads or export jobs
-reference it; otherwise it deletes the year and audits the operation.
+referencing that year; otherwise it deletes the year and audits the operation.
 
 ## Response Shapes
 

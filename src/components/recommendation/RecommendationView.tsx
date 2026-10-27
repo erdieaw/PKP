@@ -21,7 +21,7 @@ export const RecommendationView: React.FC = () => {
   const [analysis, setAnalysis] = useState('');
   const [feedback, setFeedback] = useState({ sectionCode: '', quarter: '1', recommendationText: '' });
   const sections = pkpStore.getSubKlasters();
-  const disabled = pending || pkpStore.getLoadState().loading;
+  const disabled = pending || pkpStore.getLoadState().loading || !pkpStore.isActiveYear();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [rtlInput, setRtlInput] = useState<string>('');
   const [statusInput, setStatusInput] = useState<'PENDING' | 'IN_PROGRESS' | 'RESOLVED'>('PENDING');

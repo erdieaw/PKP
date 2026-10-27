@@ -79,7 +79,9 @@ Input, analytics, workflow, evidence dan export memakai backend nyata. CRUD indi
 
 Mutasi katalog diaudit dan tidak mengubah snapshot historis terlindungi. Laporan draft/live dapat berubah. Setelah indikator memiliki record, perubahan `klasterId`, `sectionCode`, `targetNumeric`, `totalSasaranDefault`, `targetSasaranDefault` atau `polarity` ditolak409; buat ID/versi indikator baru. Section hanya dapat diarsipkan setelah indikator dan descendant section aktif diarsipkan; restore memerlukan parent aktif. Identitas/hierarki section tidak dapat diubah lewat PATCH.
 
-Dinkes membuat dan mengarsipkan Puskesmas; admin mengedit profil Puskesmas sendiri. Kedua administrator dapat membuat tahun/mengedit cutoff (gunakan1..28); lock/unlock dan DELETE tahun hanya Dinkes, dengan DELETE ditolak409 bila ada referensi. DELETE pengguna adalah deaktivasi `INACTIVE` dan mencabut session, bukan penghapusan histori.
+Dinkes membuat dan mengarsipkan Puskesmas; admin mengedit profil Puskesmas sendiri. Seluruh pengaturan tahun (create, cutoff, lock/unlock, DELETE, pemilihan tahun aktif dan switch provinsi) hanya Dinkes. DELETE ditolak409 bila tahun aktif atau ada referensi. DELETE pengguna adalah deaktivasi `INACTIVE` dan mencabut session, bukan penghapusan histori.
+
+Tahun aktif awal tidak dipilih otomatis oleh migration/seed. DINKES_ADMIN wajib memilih tahun yang sudah ada melalui `PUT /api/v1/master/active-year`; sebelum itu semua write periode dan remote read provinsi ditolak409. Kontrak frontend, revision, switch dan bootstrap: [ACTIVE_PERIOD.md](ACTIVE_PERIOD.md).
 
 `POST /users/:id/reset-password` menerima `{healthCenterId?,newPassword,reason}`. Admin hanya reset PIC tenant sendiri; Dinkes admin/PIC tenant eksplisit. Peer admin dan diri sendiri tidak boleh direset; password sendiri melalui `/auth/change-password`. Password baru12..256 karakter, alasan nonblank1..1000 wajib; Argon2id, kenaikan tokenVersion dan pencabutan semua session target dilakukan atomically. Audit mencatat target/role/alasan tanpa password/hash/token. Self-service recovery/forgot-password tidak tersedia dan tidak direncanakan, sesuai kebutuhan pengguna eksplisit.
 
@@ -102,7 +104,7 @@ URL PostgreSQL internal Compose menginterpolasi username/password **tanpa URL en
 - Tenant scope eksplisit ada di aplikasi, **tidak ada RLS**. Dinkes wajib `healthCenterId` pada data tenant, termasuk daftar user dan job. Pengecualian omit tenant hanya daftar health center/audit; dashboard compare adalah operasi lintas tenant eksplisit khusus Dinkes.
 - Session dan refresh hash disimpan PostgreSQL; refresh rotation, logout dan ganti password mencabut akses sesuai session/tokenVersion. Redis bukan session store.
 - Bulk maksimum2000 item; pagination maksimum500 (default daftar user/audit50). Katalog tanpa page/limit mengembalikan semua hasil sesuai filter; kelengkapan submit mengikuti indikator aktif secara dinamis.
-- Mutasi periode mengambil row lock tahun. Quarter YTD melindungi Januari..3*q; quarter submitted yang lebih akhir juga mengunci bulan awal.
+- Mutasi periode mengambil row lock singleton `period_settings` terlebih dahulu, menolak tahun nonaktif, lalu row lock tahun. Quarter YTD melindungi Januari..3*q; quarter submitted yang lebih akhir juga mengunci bulan awal.
 - Reopen VERIFIED menghasilkan REVISION_REQUIRED, bukan DRAFT; verify/revise/reopen wajib expectedRevision. Tanpa cascade, dependency overlap ditolak409. Dinkes dapat mengirim `cascadeDependencies:true` pada revise/reopen untuk melepas seluruh dependency transitif atomically ke REVISION_REQUIRED dengan revision naik dan audit snapshot penuh; output `invalidatedPeriods` menyebut ID/status/revision. Annual target tetap locked dan resubmit/reverify tidak otomatis.
 - SQL trigger melindungi monthly record dari mutasi tahun/periode terkunci, annual target dari perubahan locked/protected, serta PIC assignment tenant sama. Target lock berulang hanya memproses row unlocked; `locked=0` bila sudah semuanya locked.
 - Default targetPct dihitung dari target fisik default/populasi default*100, round4 (nol jika populasi nol), bukan threshold polarity; `rawTargetNumeric` mempertahankan nilai katalog. Analytics prorata round4 sebelum scoring agar cocok record bulanan; tanpa exact monthly protected snapshot, analytics memakai snapshot quarter terlindungi terkecil yang mencakup bulan, bukan master live.
@@ -164,3 +166,7 @@ Rate limit aktual tetap login5/IP dan request lain120/actor atau IP publik per60
 Pisahkan role migrator dan runtime PostgreSQL least-privilege/non-owner agar trigger audit/identity tidak dapat dinonaktifkan aplikasi. Siapkan TLS/reverse proxy/trust-proxy yang teruji, vault/rotation secret, akun storage least-privilege, Redis auth/TLS, backup dan restore drill DB+object, retention/lifecycle staging/report/session/audit, malware scanner/quarantine, monitoring/alert queue dan storage, kapasitas/HA/disaster recovery.
 
 Selesaikan validasi domain scoring/target dan kebijakan cascade, review keamanan deployment frontend/API terintegrasi, kontrak bridge eksternal yang diverifikasi, SLA dan persetujuan keamanan/privasi sebelum menyatakan siap produksi. Dokumen ini tidak menjanjikan WAF, RLS, approval digital, atau automatic cutoff/rollover.
+# Province Bridge
+
+Read-only province integration setup, security constraints, and frontend endpoint
+contracts are documented in [PROVINCE.md](src/integrations/PROVINCE.md).

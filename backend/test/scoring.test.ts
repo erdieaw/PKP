@@ -245,7 +245,7 @@ test('rounded proration matches the actual operations monthly write and live/fro
   const annual = f.targets[0]!;
   let saved: { totalSasaran: Prisma.Decimal; nilaiKinerja: number | null; capaianRiilPct: number | null } | undefined;
   const tx = {
-    $queryRaw: async () => [{ year: 2026, isLocked: false, cutoffDay: 10 }],
+    $queryRaw: async () => [{ activeYear: 2026, revision: 0, year: 2026, isLocked: false, cutoffDay: 10 }],
     periodLock: { findFirst: async () => null },
     indicator: { findMany: async () => [item] },
     annualTarget: { findMany: async () => [{ ...annual, totalSasaran: new Prisma.Decimal(annual.totalSasaran), targetSasaran: new Prisma.Decimal(annual.targetSasaran), targetPct: new Prisma.Decimal(annual.targetPct) }] },

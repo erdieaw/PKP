@@ -8,10 +8,11 @@ const commands = [
   [process.execPath, ['tests/frontend.e2e.mjs']],
   [process.execPath, ['tests/workflow-browser.e2e.mjs']],
   [process.execPath, ['tests/session-browser.e2e.mjs']],
+  [process.execPath, ['tests/province-frontend.e2e.mjs']],
 ];
 for (let index = 0; index < commands.length; index++) {
   // Browser suites share an IP; retain the real five-login/minute protection.
-  if (index >= 2) await setTimeout(61_000);
+  if (index === 2 || index === 3) await setTimeout(61_000);
   const [command, args] = commands[index];
   const result = spawnSync(command, args, { env, stdio: 'inherit' });
   if (result.status !== 0) process.exit(result.status ?? 1);

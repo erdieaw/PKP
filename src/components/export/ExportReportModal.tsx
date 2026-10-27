@@ -2,6 +2,7 @@ import React, { useState, useSyncExternalStore } from 'react';
 import { pkpStore } from '../../services/apiStore';
 import { Download, FileSpreadsheet, Printer, X } from 'lucide-react';
 import { useReportExport } from './useReportExport';
+import { ProcessingIndicator } from '../common/ProcessingIndicator';
 
 interface ExportReportModalProps {
   isOpen: boolean;
@@ -51,7 +52,7 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({ isOpen, on
             </table>
           </div> : <p role="status">Ringkasan server belum tersedia.</p>}
           {error && <p role="alert" className="p-3 rounded-lg bg-rose-50 text-rose-800">{error}</p>}
-          {pending && <p role="status">Server sedang memproses ekspor. Menutup dialog menghentikan pemantauan pekerjaan ini.</p>}
+          {pending && <ProcessingIndicator label="Server sedang memproses ekspor." description="Menutup dialog menghentikan pemantauan pekerjaan ini." />}
           {file && <a href={file.url} download={file.name} target="_blank" rel="noreferrer" className="block p-3 bg-emerald-50 text-emerald-800 rounded-lg underline">Unduh {file.name}</a>}
           {!canExport && <p>Ekspor resmi hanya tersedia bagi Admin Puskesmas dan Dinkes.</p>}
           <div className="flex flex-wrap items-center justify-end gap-2 pt-2">

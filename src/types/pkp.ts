@@ -125,6 +125,7 @@ export interface DinkesRecommendation {
 }
 
 export interface YearPeriod {
+  provinceEnabled: boolean;
   year: number;
   status: 'OPEN' | 'LOCKED' | 'DRAFT';
   cutoffDay: number;            // e.g. 10 of each month
@@ -232,4 +233,3 @@ export interface AnnualTrendData {
   klasters: AnnualKlasterTrend[];
   subKlasters: AnnualSubKlasterTrend[];
 }
-

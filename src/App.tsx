@@ -3,6 +3,7 @@ import { AppLayout } from './components/layout/AppLayout';
 import { LoginPage } from './components/auth/LoginPage';
 import { AuthUser } from './types/pkp';
 import { pkpStore } from './services/apiStore';
+import { ProcessingIndicator } from './components/common/ProcessingIndicator';
 
 class AppErrorBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
   state = { failed: false };
@@ -69,7 +70,7 @@ export function App() {
     }
   };
 
-  if (pending || error) return <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6"><div className="max-w-md text-center space-y-4 text-slate-700" role={error ? 'alert' : 'status'}><p>{error || 'Memuat sesi dan data SIPKP...'}</p>{error && <div className="flex justify-center gap-3"><button className="px-4 py-2 rounded-xl bg-emerald-600 text-white" onClick={() => void load(currentUser ?? undefined)}>Coba Lagi</button><button className="px-4 py-2 rounded-xl border border-slate-300" onClick={() => void logout()}>Kembali ke Login</button></div>}</div></div>;
+  if (pending || error) return <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6"><div className="w-full max-w-md space-y-4 text-slate-700">{error ? <div role="alert" className="space-y-4 text-center"><p>{error}</p><div className="flex flex-wrap justify-center gap-3"><button className="px-4 py-2 rounded-xl bg-emerald-600 text-white" onClick={() => void load(currentUser ?? undefined)}>Coba Lagi</button><button className="px-4 py-2 rounded-xl border border-slate-300" onClick={() => void logout()}>Kembali ke Login</button></div></div> : <ProcessingIndicator label="Memuat sesi dan data SIPKP..." description="Menyiapkan akses dan data sesuai akun Anda. Mohon tunggu." />}</div></div>;
 
   return <AppErrorBoundary>{currentUser
     ? <AppLayout currentUser={currentUser} onLogout={() => void logout()} />

@@ -38,6 +38,7 @@ async function main() {
   await prisma.$transaction(async tx => {
     // Serialize repeated seed invocations without changing application lock order.
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(2026, 272)`;
+    await tx.periodSettings.upsert({ where: { id: 1 }, create: { id: 1 }, update: {} });
     for (const section of [...catalogue.sections].sort((a, b) => a.code.split('.').length - b.code.split('.').length)) {
       await tx.section.upsert({ where: { code: section.code }, create: section, update: {} });
     }

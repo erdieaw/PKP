@@ -98,6 +98,8 @@ test('real backend integration: tenant isolation, workflow, storage, exports and
     const a = await request<Tokens>('POST', '/auth/login', 200, undefined, { username: adminA.username, password, role: Role.ADMIN_PUSKESMAS });
     const b = await request<Tokens>('POST', '/auth/login', 200, undefined, { username: adminB.username, password });
     const d = await request<Tokens>('POST', '/auth/login', 200, undefined, { username: dinkes.username, password });
+    const period = await request<{ revision: number }>('GET', '/master/active-year', 200, d.accessToken);
+    await request('PUT', '/master/active-year', 200, d.accessToken, { year, provinceEnabled: false, revision: period.revision });
     await request('POST', '/auth/login', 400, undefined, { username: adminA.username, password, role: 'NOT_A_ROLE' });
     await request('POST', '/auth/login', 401, undefined, { username: adminA.username, password: 'incorrect-password' });
     await request('POST', '/auth/login', 429, undefined, { username: adminA.username, password });

@@ -151,14 +151,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
             Utilitas & Konfigurasi
           </p>
           <div className="space-y-1">
-            <button
+            {userRole === 'DINKES_ADMIN' && <button
               onClick={onOpenYearModal}
               disabled={busy}
               className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg text-xs text-slate-300 hover:bg-slate-800 hover:text-white transition-colors"
             >
               <CalendarDays className="w-4 h-4 text-emerald-400" />
               <span>Kelola Periode Tahun</span>
-            </button>
+            </button>}
             <button
               onClick={onOpenStaffModal}
               disabled={busy || globalMode}
