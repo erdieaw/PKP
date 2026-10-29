@@ -1,0 +1,1 @@
+ALTER TABLE "monthly_records" ADD COLUMN "inputBasis" TEXT NOT NULL DEFAULT 'MONTHLY_DELTA';

@@ -1,11 +1,16 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { AnnualTarget, HealthCenter, Indicator, MonthlyRecord, PeriodStatus, Prisma, Section } from '@prisma/client';
 import { DbService } from '../core/db.service';
-import { calculateScore, category, mean, output2, prorated, rollup, SCORING_VERSION } from './scoring';
+import { category, mean, output2, SCORING_VERSION } from './scoring';
+import { evaluateDataset } from './evaluation';
+import { DO_SCORING_VERSION } from './do2026/scorer';
+import { evaluateDoCumulative, type DoRecap } from './do2026/cumulative';
+import { reportingPolicy } from './reporting-policy';
 
 type Dataset = {
   healthCenter: HealthCenter; sections: (Omit<Section, 'isActive'> & { isActive?: boolean })[]; indicators: Indicator[];
   targets: AnnualTarget[]; records: MonthlyRecord[];
+  recaps?: (DoRecap & { readonly indicatorId: string })[];
 };
 type Loaded = Dataset & { source: string; status: PeriodStatus; isOfficial: boolean };
 
@@ -47,37 +52,29 @@ export class AnalyticsService {
       const indicators = await tx.indicator.findMany({ where: { isActive: true }, orderBy: { id: 'asc' } });
       const targets = await tx.annualTarget.findMany({ where: { healthCenterId, year } });
       const records = await tx.monthlyRecord.findMany({ where: { healthCenterId, year, month: isQuarter ? { lte: periodNumber * 3, gte: 1 } : periodNumber } });
-      return { healthCenter, sections, indicators, targets, records, source: 'LIVE_DATABASE', status: lock?.status ?? 'DRAFT', isOfficial: false };
+      const recaps = isQuarter ? await tx.periodRecap.findMany({ where: { healthCenterId, year, endMonth: { lte: periodNumber * 3 } } }) : [];
+      return { healthCenter, sections, indicators, targets, records, recaps, source: 'LIVE_DATABASE', status: lock?.status ?? 'DRAFT', isOfficial: false };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
   }
 
-  private evaluate(data: Loaded, months: number[]) {
-    const targets = new Map(data.targets.map(target => [target.indicatorId, target]));
-    const records = new Map(data.records.map(record => [`${record.indicatorId}:${record.month}`, record]));
-    let populated = 0;
-    const items = data.indicators.map(indicator => {
-      const target = targets.get(indicator.id);
-      const present = months.map(month => records.get(`${indicator.id}:${month}`)).filter((record): record is MonthlyRecord => record !== undefined);
-      populated += present.length;
-      const achievement = present.length ? present.reduce((sum, record) => sum.plus(record.pencapaianRiil), new Prisma.Decimal(0)).toNumber() : null;
-      const hasAllMonths = present.length === months.length;
-      let scored: ReturnType<typeof calculateScore> = { capaianRiilPct: null, nilaiKinerja: null, scoringVersion: indicator.scoringVersion, status: 'MISSING_DATA' };
-      const denominator = target ? prorated(target.totalSasaran, months.length) : null;
-      const targetSasaran = target ? prorated(target.targetSasaran, months.length) : null;
-      if (target && (denominator === 0 || targetSasaran === 0 || Number(target.targetPct) === 0)) scored.status = 'NO_TARGET';
-      else if (target && hasAllMonths && achievement !== null) scored = calculateScore(indicator, achievement, denominator!, Number(target.targetPct));
-      else if (!target) scored.status = 'NO_TARGET';
-      return { indicator, indicatorId: indicator.id, pencapaianRiil: achievement, totalSasaran: denominator, targetSasaran, ...scored, populatedMonths: present.length, expectedMonths: months.length, isComplete: hasAllMonths && scored.nilaiKinerja !== null };
-    });
-    const rolled = rollup(data.sections, data.indicators, new Map(items.map(item => [item.indicatorId, item.nilaiKinerja])));
-    return { ...rolled, items, totalIndikator: items.length, populatedRecords: populated, completionRate: output2(items.length ? populated / (items.length * months.length) * 100 : 0) };
+  async periodRecap(healthCenterId: string, year: number, endMonth: number) {
+    const data = await this.load(healthCenterId, year, Math.ceil(endMonth / 3), true);
+    const months = Array.from({ length: endMonth }, (_, index) => index + 1);
+    return {
+      healthCenterId, year, endMonth, source: data.source, isOfficial: false,
+      items: data.indicators.filter(indicator => data.sections.some(section => section.code === indicator.sectionCode)).map(indicator => {
+        const records = data.records.filter(row => row.indicatorId === indicator.id);
+        const recap = data.recaps?.find(row => row.indicatorId === indicator.id && row.endMonth === endMonth);
+        return { indicatorId: indicator.id, indicator, ...evaluateDoCumulative(indicator.id, { records, months, ...(recap ? { recap } : {}) }) };
+      }),
+    };
   }
 
   async sheet7(healthCenterId: string, year: number, quarter: number | 'ANNUAL') {
     const q = quarter === 'ANNUAL' ? 4 : quarter;
     const data = await this.load(healthCenterId, year, q, true);
-    const result = this.evaluate(data, Array.from({ length: q * 3 }, (_, index) => index + 1));
-    const isOfficial = data.isOfficial && result.isComplete;
+    const result = evaluateDataset(data, Array.from({ length: q * 3 }, (_, index) => index + 1));
+    const isOfficial = data.isOfficial && result.isComplete && !result.containsDo;
     const rows = Array.from({ length: 5 }, (_, index) => index + 1).flatMap(id => [
       { no: `${id}.0`, name: `Klaster ${id}`, isKlasterHead: true, klasterId: id, nilaiKlaster: output2(result.klasterScores[id]!) },
       ...data.sections.filter(section => section.klasterId === id).map(section => ({ no: section.code, name: section.name, isKlasterHead: false, klasterId: id, nilaiKelompok: output2(result.sectionScores[section.code]!), isComplete: result.sectionComplete[section.code] })),
@@ -87,12 +84,16 @@ export class AnalyticsService {
       puskesmasName: data.healthCenter.name, puskesmasCode: data.healthCenter.code, code: data.healthCenter.code,
       kepalaPuskesmas: data.healthCenter.headName, nipKepalaPuskesmas: data.healthCenter.headNip, nip: data.healthCenter.headNip,
       rows, klasterScores: Object.fromEntries(Object.entries(result.klasterScores).map(([key, value]) => [key, output2(value)])),
-      nilaiKinerjaPuskesmas: output2(result.nilaiKinerjaPuskesmas), kategoriPKP: category(result.nilaiKinerjaPuskesmas),
+      nilaiKinerjaPuskesmas: output2(result.nilaiKinerjaPuskesmas), kategoriPKP: result.containsDo ? null : category(result.nilaiKinerjaPuskesmas),
       totalIndikator: result.totalIndikator, completionRate: result.completionRate, isComplete: result.isComplete, isOfficial,
+      reportingPolicy: reportingPolicy(year), workflowVerified: data.isOfficial,
+      policyConformity: 'NOT_ASSESSED' as const, completionScope: 'INPUTS_AND_ARITHMETIC' as const,
       status: result.isComplete ? data.status : 'INCOMPLETE', periodStatus: data.status,
-      source: data.source, scoringVersion: SCORING_VERSION, basis: 'YTD_CUMULATIVE_ANNUAL_TARGET_PRORATED',
+      source: data.source, scoringVersion: result.containsDo ? 'PER_RECORD_VERSIONED' : SCORING_VERSION, basis: result.containsDo ? 'PER_INDICATOR_EXPLICIT_PERIOD' : 'YTD_CUMULATIVE_ANNUAL_TARGET_PRORATED',
       aggregation: 'EQUAL_WEIGHT_SECTION_HIERARCHY_THEN_FIVE_CLUSTERS', aggregateStatus: result.isComplete ? 'COMPLETE' : 'PARTIAL',
-      targetFraction: q / 4, denominatorMode: 'ANNUAL_PRORATED_BY_COVERED_MONTHS',
+      targetFraction: result.containsDo ? null : q / 4, denominatorMode: result.containsDo ? 'PER_RECORD_ACTUAL_OR_LEGACY_PRORATED' : 'ANNUAL_PRORATED_BY_COVERED_MONTHS',
+      classificationStatus: result.containsDo ? 'UNRESOLVED_CLASSIFICATION' : 'LEGACY_V1',
+      aggregationStatus: result.containsDo ? 'PROVISIONAL_LEGACY_HIERARCHY' : 'LEGACY_V1',
       indicators: result.items.map(item => ({ ...item, pencapaianRiil: output2(item.pencapaianRiil), totalSasaran: output2(item.totalSasaran), targetSasaran: output2(item.targetSasaran), capaianRiilPct: output2(item.capaianRiilPct), nilaiKinerja: output2(item.nilaiKinerja) })),
     };
   }
@@ -101,13 +102,14 @@ export class AnalyticsService {
     const months = [];
     for (let month = 1; month <= 12; month++) {
       const data = await this.load(healthCenterId, year, month, false);
-      months.push({ month, data, result: this.evaluate(data, [month]) });
+      months.push({ month, data, result: evaluateDataset(data, [month]) });
     }
     return months;
   }
 
   async annualTrend(healthCenterId: string, year: number, klasterId = 0) {
     const months = await this.monthly(healthCenterId, year);
+    const containsDo = months.some(month => month.result.containsDo) || await this.db.periodRecap.count({ where: { healthCenterId, year } }) > 0;
     const allSections = new Map(months.flatMap(month => month.data.sections.map(section => [section.code, section] as const)));
     const overall = months.map(({ result }) => klasterId ? result.klasterScores[klasterId]! : result.nilaiKinerjaPuskesmas);
     const completed = months.map(({ data, result }) => {
@@ -115,16 +117,16 @@ export class AnalyticsService {
       const roots = data.sections.filter(section => section.klasterId === klasterId && section.parentCode === null);
       return roots.length > 0 && roots.every(section => result.sectionComplete[section.code]);
     });
-    const annualAveragePKP = mean(overall.filter((_value, index) => completed[index]));
+    const annualAveragePKP = containsDo ? null : mean(overall.filter((_value, index) => completed[index]));
     const available = overall.flatMap((score, index) => completed[index] && score !== null ? [{ month: index + 1, name: new Date(Date.UTC(year, index)).toLocaleString('id-ID', { month: 'long', timeZone: 'UTC' }), score: output2(score) }] : []);
     return {
-      healthCenterId, year, klasterId, basis: 'MONTHLY_ANNUAL_TARGET_DIVIDED_BY_12', denominatorMode: 'ANNUAL_DIVIDED_BY_12',
-      aggregation: 'ARITHMETIC_MEAN_COMPLETED_MONTHS_NOT_CUMULATIVE_OFFICIAL', scoringVersion: SCORING_VERSION,
+      healthCenterId, year, klasterId, basis: containsDo ? 'PER_RECORD_EXPLICIT_PERIOD' : 'MONTHLY_ANNUAL_TARGET_DIVIDED_BY_12', denominatorMode: containsDo ? 'PER_RECORD_ACTUAL_OR_LEGACY_PRORATED' : 'ANNUAL_DIVIDED_BY_12',
+      aggregation: containsDo ? 'ANNUAL_MEAN_UNAVAILABLE_FOR_DO_PROFILES' : 'ARITHMETIC_MEAN_COMPLETED_MONTHS_NOT_CUMULATIVE_OFFICIAL', scoringVersion: containsDo ? 'PER_RECORD_VERSIONED' : SCORING_VERSION,
       source: months.map(month => month.data.source), isOfficial: false, isComplete: completed.every(Boolean), status: completed.every(Boolean) ? 'COMPLETE' : 'INCOMPLETE',
       aggregateStatus: completed.every(Boolean) ? 'COMPLETE' : 'PARTIAL',
       monthlyOverallScores: overall.map(output2), monthlyComplete: completed,
       monthlySubmittedCount: months.map(({ data, result }) => ['SUBMITTED', 'VERIFIED'].includes(data.status) ? result.items.filter(item => !klasterId || item.indicator.klasterId === klasterId).filter(item => item.isComplete).length : 0),
-      monthlyCategories: overall.map(category), monthlyStatuses: months.map(month => month.data.status),
+      monthlyCategories: overall.map((score, index) => months[index]?.result.containsDo ? null : category(score)), monthlyStatuses: months.map(month => month.data.status),
       annualAveragePKP: output2(annualAveragePKP), annualCategoryPKP: category(annualAveragePKP), completedMonths: completed.filter(Boolean).length,
       highestMonth: [...available].sort((a, b) => b.score! - a.score!)[0] ?? null,
       lowestMonth: [...available].sort((a, b) => a.score! - b.score!)[0] ?? null,
@@ -134,22 +136,23 @@ export class AnalyticsService {
           const sections = months[index]!.data.sections.filter(section => section.klasterId === id && section.parentCode === null);
           return sections.length > 0 && sections.every(section => months[index]!.result.sectionComplete[section.code]);
         }));
-        return { klasterId: id, name: `Klaster ${id}`, monthlyScores: scores.map(output2), annualAverage: output2(average), category: category(average) };
+        return { klasterId: id, name: `Klaster ${id}`, monthlyScores: scores.map(output2), annualAverage: containsDo ? null : output2(average), category: containsDo ? null : category(average) };
       }),
       subKlasters: [...allSections.values()].filter(section => !klasterId || section.klasterId === klasterId).map(section => {
         const scores = months.map(month => month.result.sectionScores[section.code] ?? null);
         const average = mean(scores.filter((_score, index) => months[index]!.result.sectionComplete[section.code]));
-        return { code: section.code, name: section.name, klasterId: section.klasterId, indicatorCount: months[11]!.data.indicators.filter(indicator => indicator.sectionCode === section.code || indicator.sectionCode.startsWith(`${section.code}.`)).length, monthlyScores: scores.map(output2), annualAverage: output2(average), category: category(average) };
+        return { code: section.code, name: section.name, klasterId: section.klasterId, indicatorCount: months[11]!.data.indicators.filter(indicator => indicator.sectionCode === section.code || indicator.sectionCode.startsWith(`${section.code}.`)).length, monthlyScores: scores.map(output2), annualAverage: containsDo ? null : output2(average), category: containsDo ? null : category(average) };
       }),
     };
   }
 
   async indicatorTrends(healthCenterId: string, year: number, klasterId = 0) {
     const months = await this.monthly(healthCenterId, year);
+    const containsDo = months.some(month => month.result.containsDo) || await this.db.periodRecap.count({ where: { healthCenterId, year } }) > 0;
     const indicators = new Map(months.flatMap(month => month.data.indicators.map(indicator => [indicator.id, indicator] as const)));
     return {
-      healthCenterId, year, basis: 'MONTHLY_ANNUAL_TARGET_DIVIDED_BY_12', aggregation: 'ARITHMETIC_MEAN_POPULATED_SCORED_MONTHS',
-      scoringVersion: SCORING_VERSION, source: months.map(month => month.data.source), isOfficial: false,
+      healthCenterId, year, basis: containsDo ? 'PER_RECORD_EXPLICIT_PERIOD' : 'MONTHLY_ANNUAL_TARGET_DIVIDED_BY_12', aggregation: containsDo ? 'ANNUAL_MEAN_UNAVAILABLE_FOR_DO_PROFILES' : 'ARITHMETIC_MEAN_POPULATED_SCORED_MONTHS',
+      scoringVersion: containsDo ? 'PER_RECORD_VERSIONED' : SCORING_VERSION, source: months.map(month => month.data.source), isOfficial: false,
       isComplete: months.every(month => month.result.isComplete),
       status: months.every(month => month.result.isComplete) ? 'COMPLETE' : 'INCOMPLETE',
       aggregateStatus: months.every(month => month.result.isComplete) ? 'COMPLETE' : 'PARTIAL',
@@ -157,8 +160,9 @@ export class AnalyticsService {
         const items = months.map(month => month.result.items.find(item => item.indicatorId === indicator.id));
         const scores = items.map(item => item?.nilaiKinerja ?? null);
         const pct = items.map(item => item?.capaianRiilPct ?? null);
-        const average = mean(scores);
-        return { indicator, monthlyValues: items.map(item => output2(item?.pencapaianRiil ?? null)), monthlyPct: pct.map(output2), monthlyScores: scores.map(output2), annualAverageScore: output2(average), annualAveragePct: output2(mean(pct)), category: category(average), isComplete: items.every(item => item?.isComplete === true), monthlyStatus: items.map(item => item?.status ?? 'MISSING_DATA'), monthlyIndicators: items.map(item => item?.indicator ?? null) };
+        const hasDo = containsDo || items.some(item => item?.scoringVersion === DO_SCORING_VERSION);
+        const average = hasDo ? null : mean(scores);
+        return { indicator, monthlyValues: items.map(item => output2(item?.pencapaianRiil ?? null)), monthlyPct: pct.map(output2), monthlyMeasurements: items.map(item => item?.measurementValue ?? null), monthlyUnits: items.map(item => item?.measurementUnit ?? null), monthlyVersions: items.map(item => item?.scoringVersion ?? null), monthlyScores: scores.map(output2), annualAverageScore: output2(average), annualAveragePct: hasDo ? null : output2(mean(pct)), category: hasDo ? null : category(average), isComplete: items.every(item => item?.isComplete === true), monthlyStatus: items.map(item => item?.status ?? 'MISSING_DATA'), monthlyIndicators: items.map(item => item?.indicator ?? null) };
       }),
     };
   }

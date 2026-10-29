@@ -1,5 +1,35 @@
 # Analytics
 
+## DO 2026 cumulative extension
+
+`do2026/cumulative.ts` evaluates independent confirmed period recaps. Automatic
+pooling of the five candidate monthly streams (K5-R23/24/25/26/37) is suspended:
+complete months do not establish compatible samples, methods or observation windows.
+Supported profiles require a declared cumulative source; unknown profiles remain
+unavailable. Neither mean monthly percentages nor scores become an annual result.
+
+`period_recaps` is separate persistence, with source attestation and revision checks.
+An exact manual recap supersedes but is never added to monthly records, even old
+V1 history. `missingMonths` describes standalone monthly observations;
+`requiredMissingMonths` and `dataComplete` describe the selected measurement source.
+`scoreComplete` may remain false for a complete measurement without a defined rubric.
+These completeness fields describe arithmetic only. DO results explicitly expose
+`assessmentComplete=false`, `completionScope=ARITHMETIC_ONLY` and unverified observation
+validity. New count inputs are integer-validated at write boundaries; estimated source
+denominators retain decimals. Historical scalar arithmetic is unchanged.
+
+Live cumulative datasets include recaps; frozen snapshot paths return before any
+live recap lookup. Recap-only V2 dispatches into DO evaluation and blocks official
+submission. Annual arithmetic means stay unavailable for DO; the explicit annual
+measurement is exposed at `GET analytics/period-recap?year=2026&endMonth=12`.
+The frontend recap mutation uses shared scoped invalidation so cached Sheet7 and
+trends reload together. See `docs/pkp-2026/18-rekap-kumulatif-dan-tahunan.md`.
+`reporting-policy.ts` also holds all new 2026+ submissions and verifications, including
+V1-only inputs. Existing verified workflow snapshots keep their status and arithmetic;
+API/export disclose that workflow verification is not regulatory approval.
+
+## Legacy and shared infrastructure
+
 AnalyticsModule exports AnalyticsService and uses the globally provided Core DbService.
 Authorization is performed by the controller; worker callers must pass an already
 authorized, explicit healthCenterId to sheet7(healthCenterId, year, quarter).
@@ -22,7 +52,7 @@ Lower generic thresholds use indicator.targetNumeric * 100, never a penalty curv
 Bracket comparisons use unrounded Decimal ratios so rounding cannot move a boundary.
 Categories are >=91 Baik, >=81 Cukup, otherwise Kurang, with null preserved.
 
-## Periods And Aggregation
+## V1 Periods And Aggregation
 
 Sheet 7 uses January through quarter*3. ANNUAL uses quarter 4's exact quarterly
 lock, never a monthly period 4 or a different quarterly lock. Population and annual

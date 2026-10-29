@@ -18,6 +18,7 @@ import { OfficialPerformanceSheet7 } from '../official-sheet7/OfficialPerformanc
 import { AnnualTrendDashboard } from '../dashboard/AnnualTrendDashboard';
 import { OfficialIndicator, AuthUser } from '../../types/pkp';
 import { pkpStore } from '../../services/apiStore';
+import { OperatingModeNotice } from '../common/OperatingModeNotice';
 
 interface AppLayoutProps {
   currentUser: AuthUser;
@@ -144,6 +145,7 @@ const ScopedLayout: React.FC<AppLayoutProps> = ({ currentUser, onLogout }) => {
             {load.error && <button className="px-4 py-2 rounded-xl bg-emerald-600 text-white" onClick={retry}>Coba Lagi</button>}
           </div>}
           {showContent && <div inert={busy} className="w-full max-w-7xl mx-auto">
+            {!globalMode && <OperatingModeNotice />}
             {visibleTab === 'dashboard-exec' && (
               <ExecutiveDashboard
                 selectedMonth={selectedMonth}

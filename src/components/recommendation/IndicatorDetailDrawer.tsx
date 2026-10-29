@@ -19,6 +19,8 @@ import {
 } from 'lucide-react';
 import { PolarityBadge } from '../common/PolarityBadge';
 import { ScoreBadge } from '../common/ScoreBadge';
+import { measurementText } from '../../types/do2026';
+import { OperationalDefinition } from '../common/OperationalDefinition';
 
 interface IndicatorDetailDrawerProps {
   indicator: OfficialIndicator | null;
@@ -71,7 +73,8 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
     : [];
 
   const user = pkpStore.getCurrentUser();
-  const canEdit = pkpStore.canInputOwnPeriod(year) && !pkpStore.getLoadState().loading && !isHead && !pkpStore.isPeriodLocked(year, selectedMonth) &&
+  const requiresDoEditor = rec.scoringVersion === 'DO_2026_V2' || (rec.isMissing && Boolean(indicator.do2026));
+  const canEdit = !requiresDoEditor && pkpStore.canInputOwnPeriod(year) && !pkpStore.getLoadState().loading && !isHead && !pkpStore.isPeriodLocked(year, selectedMonth) &&
     (user.role === 'ADMIN_PUSKESMAS' || (user.role === 'PIC' && pkpStore.getAssignments()[indicator.id] === user.id));
   const handleSave = async () => {
     if (!canEdit || pending) return;
@@ -162,6 +165,7 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
             </p>
           </div>
 
+          {!isHead && <OperationalDefinition key={`${indicator.id}:${year}`} indicatorId={indicator.id} year={year} />}
           {/* ============================================================== */}
           {/* HEAD PENILAIAN CARD (NON-EDITABLE BANNER & AGGREGATION STATS) */}
           {/* ============================================================== */}
@@ -243,30 +247,30 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
                 <span className="font-bold text-slate-700 uppercase tracking-wider text-[11px]">
                   Konteks & Polaritas Target
                 </span>
-                <PolarityBadge polarity={indicator.polarity} targetDisplay={indicator.targetDisplay} />
+                {requiresDoEditor ? <span className="text-xs">DO_2026_V2</span> : <PolarityBadge polarity={indicator.polarity} targetDisplay={indicator.targetDisplay} />}
               </div>
 
               <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-200 text-center">
                 <div>
-                  <span className="text-[10px] text-slate-400">Target %</span>
-                  <p className="font-mono font-bold text-slate-800 text-sm mt-0.5">{target?.targetPct == null ? '-' : `${target.targetPct}%`}</p>
+                  <span className="text-[10px] text-slate-400">Target</span>
+                  <p className="font-mono font-bold text-slate-800 text-sm mt-0.5">{requiresDoEditor ? indicator.do2026?.targetDisplay ?? '-' : target?.targetPct == null ? '-' : `${target.targetPct}%`}</p>
                 </div>
                 <div>
-                  <span className="text-[10px] text-slate-400">Total Sasaran</span>
-                  <p className="font-mono font-bold text-slate-800 text-sm mt-0.5">{target?.totalSasaran ?? '-'}</p>
+                  <span className="text-[10px] text-slate-400">{requiresDoEditor ? 'D aktual' : 'Total Sasaran'}</span>
+                  <p className="font-mono font-bold text-slate-800 text-sm mt-0.5">{requiresDoEditor ? rec.totalSasaran ?? '-' : target?.totalSasaran ?? '-'}</p>
                 </div>
                 <div>
-                  <span className="text-[10px] text-slate-400">Target Fisik (Thn)</span>
-                  <p className="font-mono font-bold text-emerald-600 text-sm mt-0.5">{target?.targetSasaran?.toFixed(1) ?? '-'}</p>
+                  <span className="text-[10px] text-slate-400">{requiresDoEditor ? 'Pengukuran' : 'Target Fisik (Thn)'}</span>
+                  <p className="font-mono font-bold text-emerald-600 text-sm mt-0.5">{requiresDoEditor ? measurementText(rec.measurementValue, rec.measurementUnit) : target?.targetSasaran?.toFixed(1) ?? '-'}</p>
                 </div>
               </div>
 
-              {indicator.polarity === 'LOWER_IS_BETTER' && (
+              {!requiresDoEditor && indicator.polarity === 'LOWER_IS_BETTER' && (
                 <div className="p-2.5 rounded bg-orange-50 border border-orange-200 text-orange-800 text-[11px] leading-relaxed">
                   <strong>Catatan Polaritas:</strong> Indikator ini dinilai <em>Semakin Kecil Semakin Bagus</em>. Skor 100 diberikan jika realisasi berada di bawah target maksimal.
                 </div>
               )}
-              {indicator.polarity === 'TIERED_BRACKETS' && (
+              {!requiresDoEditor && indicator.polarity === 'TIERED_BRACKETS' && (
                 <div className="p-2.5 rounded bg-purple-50 border border-purple-200 text-purple-800 text-[11px] leading-relaxed">
                   <strong>Catatan Polaritas:</strong> Menggunakan rubrik evaluasi bertingkat (step-down scoring) sesuai aturan klinis Kemenkes.
                 </div>
@@ -325,7 +329,7 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
                         <p className="text-[10px] text-slate-500 truncate mt-0.5">Realisasi: {childRec.pencapaianRiil ?? '-'} {child.satuan}</p>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
-                        {childRec.nilaiKinerja == null ? '-' : <ScoreBadge score={childRec.nilaiKinerja} size="sm" />}
+                        {childRec.nilaiKinerja == null ? '-' : <ScoreBadge score={childRec.nilaiKinerja} size="sm" provisional={childRec.scoringVersion === 'DO_2026_V2'} />}
                         <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
                           childRec.syncStatus === 'SYNCED'
                             ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
@@ -354,7 +358,7 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
                 {isHead && <Lock className="w-3.5 h-3.5 text-slate-500" />}
                 <span>Input Capaian Bulan {selectedMonth}</span>
               </span>
-              {(isHead ? headAgg?.averageScore : rec.nilaiKinerja) == null ? '-' : <ScoreBadge score={(isHead ? headAgg?.averageScore : rec.nilaiKinerja)!} size="sm" />}
+              {(isHead ? headAgg?.averageScore : rec.nilaiKinerja) == null ? '-' : <ScoreBadge score={(isHead ? headAgg?.averageScore : rec.nilaiKinerja)!} size="sm" provisional={requiresDoEditor} />}
             </div>
 
             {isHead ? (
@@ -382,10 +386,10 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
                   </div>
                   <div>
                     <label className="text-[11px] font-semibold text-slate-600 block mb-1">
-                      Target Sasaran Bulanan:
+                      {requiresDoEditor ? 'Penyebut aktual (D):' : 'Target Sasaran Bulanan:'}
                     </label>
                     <div className="px-3 py-1.5 text-xs font-mono font-bold bg-slate-100 border border-slate-200 rounded-lg text-slate-700">
-                      {target?.targetSasaran == null ? '-' : (target.targetSasaran / 12).toFixed(1)} {indicator.satuan}
+                      {requiresDoEditor ? rec.totalSasaran ?? '-' : target?.targetSasaran == null ? '-' : (target.targetSasaran / 12).toFixed(1)}
                     </div>
                   </div>
                 </div>
@@ -419,7 +423,8 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
                     Simpan Capaian
                   </button>
                 </div>
-                {!canEdit && <p>Hanya Admin atau PIC yang ditugaskan dapat mengubah periode terbuka.</p>}
+                {requiresDoEditor ? <p role="status">Data DO 2026 memerlukan N/D aktual dan basis periode. Tutup rincian ini, lalu pilih sel realisasi pada halaman Input untuk mengedit tanpa mengubah basis data secara diam-diam.</p>
+                  : !canEdit && <p>Hanya Admin atau PIC yang ditugaskan dapat mengubah periode terbuka.</p>}
                 {evidenceId && <div className="space-y-2"><p>Bukti: {evidenceName || evidenceId}. Simpan capaian untuk menautkan bukti dan catatan.</p>
                   <button disabled={pending} onClick={handleDownload} className="underline">Siapkan unduhan bukti</button>
                   {downloadUrl && <a href={downloadUrl} target="_blank" rel="noreferrer" className="block underline">Unduh bukti dukung</a>}
@@ -465,17 +470,17 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
             </div>
           )}
 
-          {/* Operational Definition / Notes from Column L */}
+          {/* Legacy catalogue notes are not the workbook operational definition. */}
           {indicator.notes && (
-            <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-amber-900 space-y-1">
-              <span className="font-bold text-[11px] flex items-center gap-1 text-amber-800">
+            <details className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-slate-600 space-y-1">
+              <summary className="cursor-pointer font-bold text-[11px] flex items-center gap-1">
                 <HelpCircle className="w-3.5 h-3.5" />
-                <span>Petunjuk Teknis Pengisian (Definisi Operasional):</span>
-              </span>
+                <span>Catatan katalog lama (V1)</span>
+              </summary>
               <p className="text-xs leading-relaxed font-medium">
                 {indicator.notes}
               </p>
-            </div>
+            </details>
           )}
         </div>
       </div>

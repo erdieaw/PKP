@@ -4,6 +4,12 @@ Aplikasi penilaian kinerja Puskesmas dengan frontend React 19/Vite dan backend N
 
 > Scoring/prorata `ILP_2026_V1` masih provisional dan memerlukan signoff produk/domain. VERIFIED/`isOfficial` adalah status workflow internal, bukan pengesahan klinis atau regulasi. Bridge eksternal belum tersedia dan mengembalikan 503, bukan sukses simulasi.
 
+## Definisi Operasional dan Riset PKP 2026
+
+[Basis pengetahuan PKP 2026](docs/pkp-2026/README.md) memuat transkripsi lengkap 272 indikator dari workbook DO pengguna, sumber aturan nasional/daerah, ragam rumus, pemetaan identitas, konflik dan spesifikasi penyesuaian aplikasi. Definisi dibagi ke bagian kecil agar AI dapat membaca klaster yang relevan. [Register konflik](docs/pkp-2026/04-register-konflik.md) menjelaskan perbedaan antara sumber dan perilaku aplikasi, termasuk rubrik KB, prevalensi, unit rerata resep, periode, serta kategori.
+
+Kode sekarang menyediakan `DO_2026_V2` secara eksplisit/provisional untuk 23 profil, dengan N/D aktual, basis periode, unit asli dan penjagaan histori V1. Sisanya belum tersedia sebagai profil hitung V2, tanpa fallback rumus universal. **Migrasi/aktivasi lokal telah dilakukan; seluruh 272 definisi tersedia dalam database.** Di Input Capaian, pilih **Lihat definisi operasional →** pada indikator dan buka **Definisi Operasional · 2026**. [Status implementasi](docs/pkp-2026/17-status-implementasi.md) membedakan kemampuan hitung, penyimpanan definisi, hasil uji dan penerapan ke layanan. Laporan historis tidak ditulis ulang; kategori dan agregasi resmi DO masih menunggu keputusan domain.
+
 ## Quickstart Lokal
 
 Prasyarat: Node.js **22+**, npm, Docker dengan Compose plugin, dan port lokal yang tersedia. Semua perintah berikut dari **root repository**, untuk lingkungan development, bukan database produksi.

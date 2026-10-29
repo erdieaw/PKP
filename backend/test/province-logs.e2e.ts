@@ -44,7 +44,9 @@ test('province log HTTP contract with persistent tenant-isolated database fixtur
     const body = { revision: 0, username: 'private-portal-username', password: 'private-portal-password', provinceHealthCenterCode: 'private-code' };
     for (const token of [a, b]) await request('PUT', '/config', 200, token, body);
     await request('PUT', '/config', 409, a, body);
-    const stored = await db.auditLog.findMany({ where: { healthCenterId: tenants[0]!.id } });
+    // Authentication has its own audit events; this contract covers sanitized province events.
+    const provinceAudit = { healthCenterId: tenants[0]!.id, action: 'PROVINCE_CONFIG_SAVE', details: { path: ['schemaVersion'], equals: 1 } };
+    const stored = await db.auditLog.findMany({ where: provinceAudit });
     assert.equal(stored.length, 2);
     assert.doesNotMatch(JSON.stringify(stored), /private-|password|username|cookie|NIP/);
     const first = await request('GET', '/logs?limit=1', 200, a);
@@ -67,7 +69,7 @@ test('province log HTTP contract with persistent tenant-isolated database fixtur
     }
     await request('GET', '/config', 200, a);
     await request('GET', '/mappings', 200, a);
-    assert.equal(await db.auditLog.count({ where: { healthCenterId: tenants[0]!.id } }), 2);
+    assert.equal(await db.auditLog.count({ where: provinceAudit }), 2);
     t.diagnostic(`Retained append-only province log fixtures: ${tenants.map(row => row.id).join(', ')}`);
   } finally {
     await app.close();

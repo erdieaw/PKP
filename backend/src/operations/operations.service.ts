@@ -1,7 +1,10 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PeriodStatus, Prisma, Role } from '@prisma/client';
 import * as argon2 from 'argon2';
-import { calculateScore } from '../analytics/scoring';
+import { DO_SCORING_VERSION, scoreDo2026 } from '../analytics/do2026/scorer';
+import { getDoProfile } from '../analytics/do2026/profiles';
+import { guardReportingPolicy } from '../analytics/reporting-policy';
+import { containsDoSnapshot, guardDoSubmission, guardLegacyOverwrite, scoreMonthlyInput } from './monthly-scoring';
 import { Actor } from '../core/auth.decorators';
 import { audit } from '../core/audit';
 import { DbService } from '../core/db.service';
@@ -36,7 +39,7 @@ export class OperationsService {
       this.db.indicator.findMany({ where, include: { section: true }, orderBy: [{ sectionCode: 'asc' }, { id: 'asc' }], ...(paginated ? { skip: (page - 1) * limit, take: limit } : {}) }),
       this.db.indicator.count({ where }),
     ]);
-    return { items, total, page: paginated ? page : 1, limit: paginated ? limit : total };
+    return { items: items.map(indicator => ({ ...indicator, do2026: getDoProfile(indicator.id) ?? null })), total, page: paginated ? page : 1, limit: paginated ? limit : total };
   }
 
   sections(actor: Actor, query: ArchiveQuery) {
@@ -311,9 +314,12 @@ export class OperationsService {
     const persisted = new Map(records.map(record => [record.indicatorId, record]));
     const explicitTargets = new Set(targets.map(target => target.indicatorId));
     const assigned = new Set(assignments.map(assignment => assignment.indicatorId));
-    return { healthCenterId, year, month, denominatorMode: 'ANNUAL_DIVIDED_BY_12', items: catalogue.map(indicator => {
+    return { healthCenterId, year, month, denominatorMode: records.some(record => record.scoringVersion === DO_SCORING_VERSION) ? 'PER_RECORD_INPUT_BASIS' : 'ANNUAL_DIVIDED_BY_12', items: catalogue.map(indicator => {
       const record = persisted.get(indicator.id);
-      return { indicator, ...(record ?? { healthCenterId, year, month, indicatorId: indicator.id, pencapaianRiil: null, totalSasaran: null, targetSasaran: null, capaianRiilPct: null, nilaiKinerja: null, evidenceId: null, notes: null, syncStatus: 'NOT_SYNCED', scoringVersion: indicator.scoringVersion }), isMissing: !record, hasExplicitTarget: explicitTargets.has(indicator.id), isAssignedToMe: assigned.has(indicator.id), source: record ? 'PERSISTED' : 'MISSING' };
+      // This route edits the declared observation, including YTD. Monthly trends
+      // separately reject YTD as a standalone month's measurement.
+      const doResult = record?.scoringVersion === DO_SCORING_VERSION ? { ...scoreDo2026(indicator.id, { numerator: Number(record.pencapaianRiil), denominator: Number(record.totalSasaran) }), targetSasaran: null } : undefined;
+      return { indicator: { ...indicator, do2026: getDoProfile(indicator.id) ?? null }, ...(record ?? { healthCenterId, year, month, indicatorId: indicator.id, pencapaianRiil: null, totalSasaran: null, targetSasaran: null, capaianRiilPct: null, nilaiKinerja: null, evidenceId: null, notes: null, syncStatus: 'NOT_SYNCED', scoringVersion: indicator.scoringVersion }), ...(doResult ?? {}), isMissing: !record, hasExplicitTarget: explicitTargets.has(indicator.id), isAssignedToMe: assigned.has(indicator.id), source: record ? 'PERSISTED' : 'MISSING' };
     }) };
   }
 
@@ -329,27 +335,29 @@ export class OperationsService {
       const catalogue = await tx.indicator.findMany({ where: { id: { in: indicatorIds }, isActive: true, section: { isActive: true } } });
       if (catalogue.length !== indicatorIds.length) throw new BadRequestException('Unknown or inactive indicator');
       if (actor.role === Role.PIC && await tx.picAssignment.count({ where: { healthCenterId, year, picUserId: actor.id, indicatorId: { in: indicatorIds } } }) !== indicatorIds.length) throw new ForbiddenException('PIC may only write assigned indicators');
+      const historicalYtd = await tx.monthlyRecord.findFirst({ where: { healthCenterId, year, month, indicatorId: { in: indicatorIds }, scoringVersion: DO_SCORING_VERSION, inputBasis: 'YTD_ACTUAL' }, select: { id: true } });
+      if (historicalYtd) throw new ConflictException({ code: 'SEPARATE_RECAP_REQUIRED', message: 'Observasi YTD lama hanya dapat dibaca. Simpan koreksi kumulatif melalui Rekap Kumulatif & Tahunan dengan sumber dan konfirmasi.' });
+      const legacyIds = dto.records.filter(record => record.scoringVersion !== DO_SCORING_VERSION).map(record => record.indicatorId);
+      if (legacyIds.length) {
+        const existing = await tx.$queryRaw<{ indicatorId: string; scoringVersion: string }[]>`SELECT "indicatorId", "scoringVersion" FROM "monthly_records" WHERE "healthCenterId" = ${healthCenterId}::uuid AND "year" = ${year} AND "month" = ${month} AND "indicatorId" IN (${Prisma.join(legacyIds)}) AND "scoringVersion" = ${DO_SCORING_VERSION}`;
+        guardLegacyOverwrite(existing);
+      }
       const targets = await tx.annualTarget.findMany({ where: { healthCenterId, year, indicatorId: { in: indicatorIds } } });
-      if (targets.length !== indicatorIds.length) throw new ConflictException('Every record requires an explicit annual target');
       const targetById = new Map(targets.map(target => [target.indicatorId, target]));
       const indicatorById = new Map(catalogue.map(indicator => [indicator.id, indicator]));
       for (const record of dto.records) {
-        const indicator = indicatorById.get(record.indicatorId)!;
-        const annual = targetById.get(record.indicatorId)!;
+        const indicator = indicatorById.get(record.indicatorId);
+        if (!indicator) throw new BadRequestException('Unknown or inactive indicator');
+        const scored = scoreMonthlyInput(indicator, record, year, targetById.get(record.indicatorId));
         if (record.evidenceId) {
           const evidence = await tx.upload.findFirst({ where: { id: record.evidenceId, healthCenterId, year, month, status: { in: ['READY', 'ATTACHED'] } } });
           if (!evidence || !evidence.etag) throw new BadRequestException('Evidence must be finalized and belong to this tenant and month');
           await tx.upload.update({ where: { id: evidence.id }, data: { status: 'ATTACHED' } });
         }
-        // Compatibility mode: distribute the annual population and target evenly over 12 months.
-        const totalSasaran = new Prisma.Decimal(annual.totalSasaran).div(12).toDecimalPlaces(4);
-        const targetSasaran = new Prisma.Decimal(annual.targetSasaran).div(12).toDecimalPlaces(4);
-        const scored = calculateScore(indicator, record.pencapaianRiil, Number(totalSasaran), Number(annual.targetPct));
-        const usable = totalSasaran.greaterThan(0) && targetSasaran.greaterThan(0) && annual.targetPct.greaterThan(0);
-        const data = { pencapaianRiil: record.pencapaianRiil, totalSasaran, targetSasaran, capaianRiilPct: usable ? scored.capaianRiilPct : null, nilaiKinerja: usable ? scored.nilaiKinerja : null, scoringVersion: scored.scoringVersion, evidenceId: record.evidenceId, notes: record.notes, updatedBy: actor.id, syncStatus: 'NOT_SYNCED' };
+        const data = { pencapaianRiil: record.pencapaianRiil, ...scored, evidenceId: record.evidenceId, notes: record.notes, updatedBy: actor.id, syncStatus: 'NOT_SYNCED' };
         await tx.monthlyRecord.upsert({ where: { healthCenterId_indicatorId_year_month: { healthCenterId, indicatorId: record.indicatorId, year, month } }, create: { healthCenterId, indicatorId: record.indicatorId, year, month, ...data }, update: data });
       }
-      await audit(tx, actor, healthCenterId, 'MONTHLY_RECORDS_UPDATED', { year, month, count: indicatorIds.length, indicatorIds });
+      await audit(tx, actor, healthCenterId, 'MONTHLY_RECORDS_UPDATED', { year, month, count: indicatorIds.length, indicatorIds, inputs: dto.records.map(record => ({ indicatorId: record.indicatorId, scoringVersion: record.scoringVersion ?? 'ILP_2026_V1', inputBasis: record.inputBasis ?? 'MONTHLY_DELTA' })) });
       return { healthCenterId, year, month, updated: indicatorIds.length, syncStatus: 'NOT_SYNCED' };
     }, { timeout: 30000 });
   }
@@ -374,6 +382,8 @@ export class OperationsService {
       const status = previous?.status ?? PeriodStatus.DRAFT;
       if (action === 'submit' && status !== 'DRAFT' && status !== 'REVISION_REQUIRED') throw new ConflictException('Only DRAFT or REVISION_REQUIRED may be submitted');
       if ((action === 'verify' || action === 'revise') && status !== 'SUBMITTED') throw new ConflictException('Only SUBMITTED may be reviewed');
+      if (action === 'submit' || action === 'verify') guardReportingPolicy(year);
+      if (action === 'verify' && containsDoSnapshot(previous?.snapshot)) throw new ConflictException('DO_2026_V2 verification is blocked until official category and aggregation policy is confirmed');
       if (action === 'reopen' && status !== 'VERIFIED') throw new ConflictException('Only VERIFIED may be reopened');
       const coveredMonths = monthsFor(dto);
       const invalidatedPeriods: { id: string; status: PeriodStatus; revision: number }[] = [];
@@ -411,10 +421,12 @@ export class OperationsService {
         const indicatorIds = catalogue.map(indicator => indicator.id);
         const targets = await tx.annualTarget.findMany({ where: { healthCenterId, year, indicatorId: { in: indicatorIds } }, orderBy: { indicatorId: 'asc' } });
         const records = await tx.monthlyRecord.findMany({ where: { healthCenterId, year, month: { in: coveredMonths }, indicatorId: { in: indicatorIds } }, orderBy: [{ month: 'asc' }, { indicatorId: 'asc' }] });
+        if (await tx.periodRecap.count({ where: { healthCenterId, year, endMonth: { in: coveredMonths } } })) throw new ConflictException({ code: 'DO_POLICY_UNRESOLVED', message: 'Pengajuan resmi dengan rekap DO 2026 belum diaktifkan sampai kebijakan penilaian disahkan.' });
+        guardDoSubmission(catalogue, records, coveredMonths);
         if (!catalogue.length || targets.length !== catalogue.length || records.length !== catalogue.length * coveredMonths.length || records.some(record => record.capaianRiilPct === null || record.nilaiKinerja === null)) throw new ConflictException('Submission requires explicit targets and scored monthly records for every active indicator and covered month');
         await tx.annualTarget.updateMany({ where: { healthCenterId, year, isLocked: false }, data: { isLocked: true } });
         const healthCenter = await tx.healthCenter.findUniqueOrThrow({ where: { id: healthCenterId } });
-        const sections = await tx.section.findMany({ orderBy: [{ order: 'asc' }, { code: 'asc' }] });
+        const sections = await tx.section.findMany({ where: { isActive: true }, orderBy: [{ order: 'asc' }, { code: 'asc' }] });
         snapshot = json({ schemaVersion: 1, denominatorMode: 'ANNUAL_DIVIDED_BY_12', period: { ...identity, coveredMonths }, healthCenter, sections, indicators: catalogue, targets: targets.map(target => ({ ...target, isLocked: true })), records, submittedBy: { id: actor.id, name: actor.name, role: actor.role }, submittedAt: now });
       }
       const data: Prisma.PeriodLockUpdateInput = action === 'submit'

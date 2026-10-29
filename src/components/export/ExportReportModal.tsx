@@ -30,8 +30,10 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({ isOpen, on
           <div className="flex items-center gap-2.5">
             <FileSpreadsheet className="w-5 h-5 text-emerald-600" />
             <div><h3 className="font-bold text-slate-800 text-sm">Ekspor Laporan Penilaian Kinerja Puskesmas (PKP)</h3>
-              <p className="text-[11px] text-slate-500">Excel Sheet 7 dan PDF resmi dihasilkan oleh server.</p></div>
+              <p className="text-[11px] text-slate-500">Excel Sheet 7 dan PDF dihasilkan oleh server. Verifikasi aplikasi bukan pengesahan kesesuaian aturan PKP 2026.</p></div>
           </div>
+          {summary?.classificationStatus === 'UNRESOLVED_CLASSIFICATION' && <p role="status" className="rounded-lg bg-amber-50 p-3 text-amber-900">Hasil DO 2026 masih provisional. Kategori belum ditetapkan; rekap hierarkis hanya pratinjau dan belum dapat disahkan sebagai laporan resmi.</p>}
+          {summary?.reportingPolicy && !summary.reportingPolicy.canSubmit && <p role="status" className="rounded-lg bg-amber-50 p-3 text-amber-900">{summary.reportingPolicy.reason}</p>}
           <button aria-label="Tutup ekspor laporan" onClick={onClose} className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg"><X className="w-5 h-5" /></button>
         </div>
         <div className="p-6 space-y-6 text-xs">
@@ -39,7 +41,7 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({ isOpen, on
             <label className="font-semibold text-slate-600">Pilih Periode Laporan:
               <select aria-label="Periode laporan ekspor" value={reportPeriod} disabled={pending} onChange={e => setReportPeriod(e.target.value === 'ANNUAL' ? 'ANNUAL' : Number(e.target.value) as 1 | 2 | 3 | 4)} className="mt-1 w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 font-bold text-slate-800">
                 {[1, 2, 3, 4].map(q => <option key={q} value={q}>Triwulan {q} (YTD Januari - bulan {q * 3})</option>)}
-                <option value="ANNUAL">Laporan Tahunan Lengkap (12 Bulan)</option>
+                <option value="ANNUAL">Rekap Tahunan (Januari–Desember)</option>
               </select>
             </label>
             <div><p className="font-semibold text-slate-600 mb-1">Fasilitas Pelayanan Kesehatan:</p><div className="px-3 py-1.5 bg-slate-100 border border-slate-200 rounded-lg font-bold text-slate-700">{puskesmasName} (TA {year})</div></div>
@@ -54,9 +56,9 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({ isOpen, on
           {error && <p role="alert" className="p-3 rounded-lg bg-rose-50 text-rose-800">{error}</p>}
           {pending && <ProcessingIndicator label="Server sedang memproses ekspor." description="Menutup dialog menghentikan pemantauan pekerjaan ini." />}
           {file && <a href={file.url} download={file.name} target="_blank" rel="noreferrer" className="block p-3 bg-emerald-50 text-emerald-800 rounded-lg underline">Unduh {file.name}</a>}
-          {!canExport && <p>Ekspor resmi hanya tersedia bagi Admin Puskesmas dan Dinkes.</p>}
+          {!canExport && <p>Unduhan laporan hanya tersedia bagi Admin Puskesmas dan Dinkes.</p>}
           <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
-            <button disabled={pending || !canExport || !summary} onClick={() => void create('pdf', reportPeriod)} className="px-3.5 py-2 bg-slate-100 text-slate-700 rounded-lg font-semibold flex items-center gap-1.5 disabled:opacity-50"><Printer className="w-4 h-4" />Unduh PDF Resmi</button>
+            <button disabled={pending || !canExport || !summary} onClick={() => void create('pdf', reportPeriod)} className="px-3.5 py-2 bg-slate-100 text-slate-700 rounded-lg font-semibold flex items-center gap-1.5 disabled:opacity-50"><Printer className="w-4 h-4" />{summary?.reportingPolicy?.operatingMode === 'INTERNAL_PHASED' ? 'Unduh PDF Evaluasi Internal' : summary?.isOfficial ? 'Unduh PDF Terverifikasi (Histori)' : 'Unduh PDF Provisional'}</button>
             <button disabled={pending || !canExport || !summary} onClick={() => void create('excel', reportPeriod)} className="px-4 py-2 bg-emerald-600 text-white rounded-lg font-bold flex items-center gap-2 shadow-sm disabled:opacity-50"><Download className="w-4 h-4" />Unduh Excel (Sheet 7)</button>
           </div>
         </div>

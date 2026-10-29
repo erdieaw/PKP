@@ -73,12 +73,12 @@ export const OfficialPerformanceSheet7: React.FC = () => {
     if (currentUser.role !== 'ADMIN_PUSKESMAS' || pkpStore.isPeriodLocked(currentYear, periodNum, true)) return;
     if (!await runWorkflow(() => pkpStore.submitPeriod(currentYear, periodNum, true))) return;
     setShowSubmitModal(false);
-    setNotification('Laporan Kinerja resmi berhasil diajukan ke Dinas Kesehatan dan dikunci untuk verifikasi.');
+    setNotification('Laporan berhasil diajukan melalui aplikasi dan dikunci untuk verifikasi.');
   };
 
   const handleVerifyByDinkes = async () => {
     if (!isDinkes || !await runWorkflow(() => pkpStore.verifyAndLockPeriod(currentYear, periodNum, true))) return;
-    setNotification('Hasil Kinerja Puskesmas telah DIVERIFIKASI & DIKUNCI secara sah oleh Dinas Kesehatan.');
+    setNotification('Laporan telah diverifikasi dan dikunci dalam aplikasi. Status ini bukan pengesahan aturan penilaian.');
   };
 
   const handleRequestRevision = async () => {
@@ -98,6 +98,7 @@ export const OfficialPerformanceSheet7: React.FC = () => {
   };
 
   const getScoreBadge = (score: number | null | undefined) => {
+    if (summaryData?.classificationStatus === 'UNRESOLVED_CLASSIFICATION') return 'bg-slate-100 text-slate-600 border-slate-200';
     if (score == null) return 'bg-slate-100 text-slate-500 border-slate-200';
     if (score >= 91) return 'bg-emerald-100 text-emerald-800 border-emerald-300';
     if (score >= 81) return 'bg-amber-100 text-amber-800 border-amber-300';
@@ -106,13 +107,17 @@ export const OfficialPerformanceSheet7: React.FC = () => {
 
   const isLocked = !pkpStore.isActiveYear(currentYear) || pkpStore.isPeriodLocked(currentYear, periodNum, true);
   if (!summaryData) return <div role={pkpStore.getLoadState().error ? 'alert' : 'status'} className="p-6 bg-white rounded-2xl border border-slate-200">{pkpStore.getLoadState().error?.message ?? 'Ringkasan server belum tersedia untuk periode ini.'}</div>;
+  const reportingPolicy = summaryData.reportingPolicy;
+  const internalEvaluation = reportingPolicy?.operatingMode === 'INTERNAL_PHASED';
 
   return (
+    <>
+    {reportingPolicy && !reportingPolicy.canSubmit && <p role="status" className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{reportingPolicy.reason} Status verifikasi historis tetap dipertahankan, tetapi bukan bukti kesesuaian aturan PKP 2026.</p>}
     <div className="space-y-6">
       {error && <p role="alert" className="p-4 bg-rose-50 text-rose-800 rounded-xl">{error}</p>}
       {pending && <ProcessingIndicator label="Menyimpan perubahan periode ke server..." description="Tunggu hingga penyimpanan selesai sebelum melanjutkan perubahan periode." />}
       {reportExport.error && <p role="alert" className="p-4 bg-rose-50 text-rose-800 rounded-xl">{reportExport.error}</p>}
-      {reportExport.pending && <ProcessingIndicator label="Server sedang memproses PDF resmi..." description="Tautan unduhan akan tersedia setelah laporan selesai diproses." />}
+      {reportExport.pending && <ProcessingIndicator label="Server sedang memproses PDF laporan..." description="Tautan unduhan akan tersedia setelah laporan selesai diproses." />}
       {reportExport.file && <a href={reportExport.file.url} download={reportExport.file.name} target="_blank" rel="noreferrer" className="block p-4 bg-emerald-50 text-emerald-800 rounded-xl underline">Unduh {reportExport.file.name}</a>}
       {/* ===================== NOTIFICATION TOAST ===================== */}
       {notification && (
@@ -132,13 +137,13 @@ export const OfficialPerformanceSheet7: React.FC = () => {
         <div>
           <div className="flex items-center gap-2 text-indigo-600 font-bold text-xs uppercase tracking-wider mb-1">
             <FileCheck2 className="w-4 h-4" />
-            <span>Instrumen Resmi Kemenkes / Jawa Timur • Sheet 7 Excel</span>
+            <span>Rekap instrumen PKP • Sheet 7 • {internalEvaluation ? 'Evaluasi internal' : summaryData.isOfficial ? 'Histori terverifikasi' : 'Provisional'}</span>
           </div>
           <h2 className="text-2xl font-black text-slate-800 tracking-tight flex items-center gap-2">
             Lembar Hasil Kinerja Puskesmas (NILAI KINERJA {currentYear})
           </h2>
             <p className="text-xs text-slate-500 mt-1 max-w-2xl">
-            Rekapitulasi server untuk seluruh klaster. Triwulan adalah kumulatif YTD dari Januari sampai akhir triwulan. Dokumen resmi diunduh dari server.
+            Rekapitulasi server untuk seluruh klaster. Triwulan mencakup Januari sampai akhir triwulan. Unduhan PDF tidak otomatis menjadi dokumen resmi atau pengesahan Dinkes.
           </p>
         </div>
 
@@ -195,7 +200,7 @@ export const OfficialPerformanceSheet7: React.FC = () => {
             className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs flex items-center gap-2 shadow-sm transition-all"
           >
             <Printer className="w-4 h-4" />
-            <span>Unduh Berita Acara (PDF Resmi)</span>
+            <span>{internalEvaluation ? 'Unduh PDF Evaluasi Internal' : summaryData.isOfficial ? 'Unduh PDF Histori Terverifikasi' : 'Unduh PDF Provisional'}</span>
           </button>
         </div>
       </div>
@@ -214,11 +219,11 @@ export const OfficialPerformanceSheet7: React.FC = () => {
                     STATUS: DIVERIFIKASI & DIKUNCI OLEH DINAS KESEHATAN
                   </span>
                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-200 text-emerald-800 font-bold uppercase">
-                    Sah / Locked
+                    Terkunci dalam aplikasi
                   </span>
                 </div>
                 <p className="text-xs text-emerald-800">
-                  Diverifikasi oleh <span className="font-semibold">{lockState.verifiedBy}</span> pada {lockState.verifiedAt}. Seluruh nilai indikator periode ini terkunci secara resmi.
+                  Diverifikasi dalam aplikasi oleh <span className="font-semibold">{lockState.verifiedBy}</span> pada {lockState.verifiedAt}. Nilai periode ini terkunci; status historis ini bukan pengesahan aturan PKP 2026.
                 </p>
               </div>
             </div>
@@ -267,7 +272,7 @@ export const OfficialPerformanceSheet7: React.FC = () => {
                 </button>
                 <button
                   onClick={handleVerifyByDinkes}
-                  disabled={pending}
+                  disabled={pending || !reportingPolicy?.canVerify}
                   className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all"
                 >
                   <CheckCircle2 className="w-4 h-4" />
@@ -306,6 +311,7 @@ export const OfficialPerformanceSheet7: React.FC = () => {
             {currentUser.role === 'ADMIN_PUSKESMAS' && !isLocked && (
               <button
                 onClick={() => setShowSubmitModal(true)}
+                disabled={!reportingPolicy?.canSubmit}
                 className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all self-start md:self-auto"
               >
                 <Send className="w-3.5 h-3.5" />
@@ -331,7 +337,7 @@ export const OfficialPerformanceSheet7: React.FC = () => {
                   </span>
                 </div>
                 <p className="text-xs text-slate-500">
-                  PIC masih dapat mengisi dan mengoreksi data capaian bulanan. Setelah data lengkap, Kepala Puskesmas / Admin dapat mengajukan laporan resmi ke Dinkes.
+                  PIC masih dapat mengisi dan mengoreksi data capaian bulanan. Pengajuan resmi memerlukan kebijakan penilaian yang sudah disahkan, bukan hanya angka yang lengkap.
                 </p>
               </div>
             </div>
@@ -339,6 +345,7 @@ export const OfficialPerformanceSheet7: React.FC = () => {
             {currentUser.role === 'ADMIN_PUSKESMAS' && !isLocked && (
               <button
                 onClick={() => setShowSubmitModal(true)}
+                disabled={!reportingPolicy?.canSubmit}
                 className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-2 shadow-sm transition-all self-start md:self-auto"
               >
                 <Send className="w-4 h-4" />
@@ -355,7 +362,7 @@ export const OfficialPerformanceSheet7: React.FC = () => {
         <div className="md:col-span-2 bg-gradient-to-br from-slate-900 to-slate-800 text-white p-5 rounded-2xl shadow-sm border border-slate-700 relative overflow-hidden">
           <div className="relative z-10">
             <div className="flex items-center justify-between text-slate-300 text-xs font-semibold mb-2">
-              <span>NILAI KINERJA PUSKESMAS</span>
+              <span>{summaryData.isOfficial ? 'NILAI KINERJA PUSKESMAS' : summaryData.isComplete ? 'PRATINJAU KINERJA' : 'PRATINJAU PARSIAL'}</span>
               <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-mono border border-emerald-500/30">
                 {summaryData.periodLabel}
               </span>
@@ -369,7 +376,7 @@ export const OfficialPerformanceSheet7: React.FC = () => {
 
             <div className="mt-3 flex items-center gap-2">
               <span className={`px-2.5 py-1 rounded-full text-xs font-black uppercase tracking-wider ${
-                summaryData.kategoriPKP === 'Kinerja Baik'
+                summaryData.kategoriPKP == null ? 'bg-slate-700 text-slate-200' : summaryData.kategoriPKP === 'Kinerja Baik'
                   ? 'bg-emerald-500 text-white'
                   : summaryData.kategoriPKP === 'Kinerja Cukup'
                   ? 'bg-amber-500 text-slate-950'
@@ -378,11 +385,11 @@ export const OfficialPerformanceSheet7: React.FC = () => {
                 {summaryData.kategoriPKP ?? '-'}
               </span>
               <span className="text-[11px] text-slate-400">
-                (Standar PKP Jatim & Kemenkes)
+                {summaryData.classificationStatus === 'UNRESOLVED_CLASSIFICATION' ? 'Kategori DO belum ditetapkan' : 'Kategori kompatibilitas V1'}
               </span>
             </div>
             <p className="text-[11px] text-slate-400 mt-3 pt-3 border-t border-slate-700">
-              Formula: Rerata 5 Klaster = (D6 + D19 + D25 + D28 + D32) / 5
+              {summaryData.classificationStatus === 'UNRESOLVED_CLASSIFICATION' ? 'Agregasi hierarki sementara; bukan hasil DO resmi. Nilai kosong tidak dianggap nol.' : 'Agregasi dan kategori kompatibilitas V1. Verifikasi aplikasi bukan pengesahan kesesuaian aturan PKP 2026.'}
             </p>
           </div>
         </div>
@@ -438,7 +445,7 @@ export const OfficialPerformanceSheet7: React.FC = () => {
                 {summaryData.puskesmasName}
               </h2>
               <p className="text-[10px] text-slate-700">
-                Pratinjau data server. Dokumen resmi tersedia melalui unduhan PDF.
+                Pratinjau data server untuk evaluasi. Unduhan PDF bukan pengesahan Dinkes.
               </p>
               <p className="text-[9px] text-slate-600">
                 Kode Faskes: {summaryData.puskesmasCode}
@@ -578,10 +585,10 @@ export const OfficialPerformanceSheet7: React.FC = () => {
           </table>
         </div>
 
-        {/* PRINT ONLY: OFFICIAL SIGNATURE BLOCKS */}
-        <div className="print-only mt-10 pt-6 border-t border-slate-300">
+        {/* Legacy presentation only; internal evaluation has no approval/signature blocks. */}
+        {reportingPolicy?.operatingMode === 'HISTORICAL_COMPATIBILITY' && <div className="print-only mt-10 pt-6 border-t border-slate-300">
           <p className="text-xs text-right text-slate-800 mb-8 font-serif">
-            Dokumen resmi dan pengesahan hanya tersedia pada PDF yang dihasilkan server.
+            Identitas berikut adalah tampilan kompatibilitas histori, bukan bukti tanda tangan atau pengesahan regulasi.
           </p>
 
           <div className="grid grid-cols-3 gap-6 text-center text-xs">
@@ -615,7 +622,7 @@ export const OfficialPerformanceSheet7: React.FC = () => {
                 {lockState.verifiedBy ?? '-'}
               </p>
               <p className="text-[10px] text-slate-600">
-                Identitas pengesah mengikuti dokumen server.
+                Identitas mengikuti histori verifikasi aplikasi.
               </p>
             </div>
 
@@ -632,11 +639,11 @@ export const OfficialPerformanceSheet7: React.FC = () => {
                 -
               </p>
               <p className="text-[10px] text-slate-600">
-                Identitas pengesah mengikuti dokumen server.
+                Identitas mengikuti histori verifikasi aplikasi.
               </p>
             </div>
           </div>
-        </div>
+        </div>}
 
       </div>
 
@@ -724,5 +731,6 @@ export const OfficialPerformanceSheet7: React.FC = () => {
         </div>
       )}
     </div>
+    </>
   );
 };

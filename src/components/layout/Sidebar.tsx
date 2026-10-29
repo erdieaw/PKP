@@ -70,7 +70,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'recommendations' as NavTab, label: 'Rekomendasi & RTL', icon: MessageSquareCheck },
   ] : [
     { id: 'dashboard-exec' as NavTab, label: 'Dashboard Kinerja PKP', icon: LayoutDashboard },
-    { id: 'official-sheet7' as NavTab, label: 'Nilai Kinerja Resmi (Sheet 7)', icon: FileCheck2 },
+    { id: 'official-sheet7' as NavTab, label: 'Rekap Kinerja (Sheet 7)', icon: FileCheck2 },
     { id: 'dashboard-annual' as NavTab, label: 'Dashboard Tahunan (12 Bln)', icon: CalendarRange },
     { id: 'dashboard-pic' as NavTab, label: 'Dashboard PIC & Kepatuhan', icon: Users },
     { id: 'data-entry' as NavTab, label: 'Input Capaian Bulanan', icon: ClipboardPen },

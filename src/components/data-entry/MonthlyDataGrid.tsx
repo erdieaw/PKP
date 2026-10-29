@@ -1,5 +1,6 @@
-import React, { useState, useSyncExternalStore } from 'react';
+import React, { useEffect, useState, useSyncExternalStore } from 'react';
 import { pkpStore } from '../../services/apiStore';
+import { PeriodRecapPanel } from './PeriodRecapPanel';
 import { ApiError } from '../../services/apiClient';
 import { epSyncStatus, lastSyncText } from '../../services/integrationStatus';
 import { indicatorDisplayCode } from '../../services/indicatorOrder';
@@ -26,6 +27,8 @@ import {
 } from 'lucide-react';
 import { PolarityBadge } from '../common/PolarityBadge';
 import { ScoreBadge } from '../common/ScoreBadge';
+import { Do2026Editor } from './Do2026Editor';
+import { measurementText } from '../../types/do2026';
 
 interface MonthlyDataGridProps {
   selectedMonth: number;
@@ -62,11 +65,18 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
 
   const currentYear = pkpStore.getCurrentYear();
   const currentUser = pkpStore.getCurrentUser();
+  const selectedCenter = pkpStore.getSelectedHealthCenterId();
+  useEffect(() => {
+    setEditingId(null);
+    setTempValue('');
+    setError(null);
+  }, [currentYear, selectedMonth, selectedKlaster, periodViewMode, selectedCenter]);
   const isDinkes = currentUser.role === 'DINKES_ADMIN';
 
   const isQuarterMode = periodViewMode === 'QUARTERLY';
   const activePeriodNum = isQuarterMode ? selectedQuarter : selectedMonth;
   const lockState = pkpStore.getPeriodLock(currentYear, activePeriodNum, isQuarterMode);
+  const reportingPolicy = pkpStore.getReportingPolicy();
 
   const indicators = pkpStore.getIndicators();
   const annualTargets = pkpStore.getAnnualTargets();
@@ -136,7 +146,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
       return;
     }
     if (isQuarterMode) {
-      showToast('Pencapaian Triwulan merupakan akumulasi otomatis dari data bulanan. Beralih ke Mode Bulanan untuk menginput capaian riil.');
+      showToast('Hasil triwulan mengikuti versi dan basis data tersimpan. Beralih ke Mode Bulanan untuk menginput capaian riil.');
       return;
     }
     setEditingId(ind.id);
@@ -235,7 +245,15 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
 
   return (
     <div className="space-y-4">
+      <PeriodRecapPanel key={`${currentYear}:${selectedCenter}`} year={currentYear} month={selectedMonth} />
+      <p className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">DO 2026 masih provisional: skor yang tersedia berasal dari rubrik sumber; kategori dan rekap resmi belum disahkan. Tampilan bulanan dapat memuat observasi YTD berlabel kumulatif, bukan capaian bulan mandiri.</p>
+      {editingId && !isQuarterMode && indicators.filter(ind => ind.id === editingId && ind.do2026).map(ind => (
+        <Do2026Editor key={`${ind.id}:${currentYear}:${selectedMonth}:${selectedCenter}`}
+          indicator={ind} record={pkpStore.getMonthlyRecord(ind.id, selectedMonth)} year={currentYear} month={selectedMonth}
+          canEdit={canEdit(ind.id)} onClose={() => setEditingId(null)} />
+      ))}
       {error && <p role="alert" className="p-3 bg-rose-50 text-rose-800 rounded-xl">{error}</p>}
+      {reportingPolicy && !reportingPolicy.canSubmit && <p role="status" className="p-3 bg-amber-50 text-amber-900 rounded-xl">{reportingPolicy.reason} Verifikasi historis tidak membuktikan kesesuaian aturan PKP 2026.</p>}
       {pending && <p role="status">Menyimpan ke server...</p>}
       {/* Toast Notification */}
       {toast && (
@@ -262,8 +280,8 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
             </div>
             <p className="text-xs text-slate-500">
               {isQuarterMode 
-                ? 'Mode Triwulanan: Kumulatif YTD dari Januari sampai akhir triwulan, bukan triwulan mandiri.'
-                : 'Mode Bulanan: Input numerator per bulan berjalan oleh masing-masing PIC Program.'}
+                ? 'Mode Triwulanan: Hasil backend mengikuti versi dan basis data. YTD tidak dijumlahkan antarbulan.'
+                : 'Mode Bulanan: DO 2026 memakai N/D aktual dan basis periode; data V1 tetap kompatibilitas historis.'}
             </p>
           </div>
         </div>
@@ -382,7 +400,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
               </button>
               <button
                 onClick={handleVerifyByDinkes}
-                disabled={pending || !canManageWorkflow}
+                disabled={pending || !canManageWorkflow || !reportingPolicy?.canVerify}
                 className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs"
               >
                 <CheckCircle2 className="w-3.5 h-3.5" />
@@ -421,6 +439,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
           {currentUser.role === 'ADMIN_PUSKESMAS' && !isLocked && (
             <button
               onClick={() => setShowSubmitModal(true)}
+              disabled={!reportingPolicy?.canSubmit}
               className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all self-start md:self-auto"
             >
               <Send className="w-3.5 h-3.5" />
@@ -441,6 +460,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
 
           <button
             onClick={() => setShowSubmitModal(true)}
+            disabled={!reportingPolicy?.canSubmit}
             className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs self-start sm:self-auto"
           >
             <Send className="w-3.5 h-3.5" />
@@ -555,7 +575,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
               <tr className="bg-slate-100 border-b border-slate-300 text-slate-700 font-bold uppercase text-[10px] tracking-wider">
                 <th className="py-2.5 px-3 w-16 text-center border-r border-slate-200">No / Kode</th>
                 <th className="py-2.5 px-3 min-w-[260px] border-r border-slate-200">Kegiatan & Indikator Kinerja</th>
-                <th className="py-2.5 px-2.5 w-20 border-r border-slate-200">Target %</th>
+                <th className="py-2.5 px-2.5 w-20 border-r border-slate-200">Target DO</th>
                 <th className="py-2.5 px-2.5 w-20 border-r border-slate-200">Satuan</th>
                 <th className="py-2.5 px-2.5 w-24 text-right border-r border-slate-200">
                   {isQuarterMode ? 'Total Sas. TW' : 'Tot. Sasaran'}
@@ -579,6 +599,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
                 const monthlyAgg = pkpStore.getSubKlasterAggregation(sec.sectionCode, selectedMonth);
                 const quarterRow = isQuarterMode ? quarterRows?.find(row => row.no === sec.sectionCode && !row.isKlasterHead) : undefined;
                 const agg = { ...monthlyAgg, averageScore: isQuarterMode ? quarterRow?.nilaiKelompok ?? null : monthlyAgg.averageScore };
+                const provisional = sec.items.some(ind => (isQuarterMode ? pkpStore.getQuarterlyRecord(ind.id, selectedQuarter) : pkpStore.getMonthlyRecord(ind.id, selectedMonth)).scoringVersion === 'DO_2026_V2');
 
                 return (
                   <React.Fragment key={`group-${sec.sectionCode}`}>
@@ -637,7 +658,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
                       </td>
 
                       <td className="py-2.5 px-3 text-center align-middle">
-                         {agg.averageScore == null ? '-' : <ScoreBadge score={agg.averageScore} size="sm" />}
+                         {agg.averageScore == null ? '-' : <ScoreBadge score={agg.averageScore} size="sm" provisional={provisional} />}
                       </td>
 
                       <td className="py-2.5 px-3 align-middle text-[11px] text-slate-600">
@@ -656,10 +677,11 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
                         : pkpStore.getMonthlyRecord(ind.id, selectedMonth);
 
                       const target = annualTargets[ind.id];
+                      const usesDo = rec.scoringVersion === 'DO_2026_V2' || (rec.pencapaianRiil == null && Boolean(ind.do2026));
 
                       const fraction = isQuarterMode ? selectedQuarter / 4 : 1 / 12;
-                      const periodTotalSasaran = target?.totalSasaran == null ? null : target.totalSasaran * fraction;
-                      const periodTargetSasaran = target?.targetSasaran == null ? null : target.targetSasaran * fraction;
+                      const periodTotalSasaran = usesDo ? rec.totalSasaran : target?.totalSasaran == null ? null : target.totalSasaran * fraction;
+                      const periodTargetSasaran = usesDo ? rec.targetSasaran : target?.targetSasaran == null ? null : target.targetSasaran * fraction;
 
                       const pic = pkpStore.getPicForIndicator(ind.id);
                       const isEditing = editingId === ind.id && canEdit(ind.id);
@@ -689,24 +711,29 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
                               </p>
                               <div className="flex items-center gap-2 mt-0.5">
                                 <span className="text-[11px] text-slate-500 line-clamp-1">{ind.kegiatan}</span>
-                                <PolarityBadge polarity={ind.polarity} targetDisplay={ind.targetDisplay} />
+                                {!usesDo && <PolarityBadge polarity={ind.polarity} targetDisplay={ind.targetDisplay} />}
                               </div>
+                              <p className="mt-1 text-[10px] text-slate-500">
+                                {usesDo ? `DO_2026_V2 · ${rec.inputBasis === 'YTD_ACTUAL' ? 'Kumulatif YTD' : rec.inputBasis === 'PERIOD_ACTUAL' ? 'Aktual periode' : 'Basis belum tersedia'}` : `${rec.scoringVersion ?? 'ILP_2026_V1'} · kompatibilitas historis`}
+                              </p>
+                              <p className="mt-1 text-[11px] font-medium text-emerald-700">Lihat definisi operasional →</p>
                             </div>
                           </td>
 
                           {/* Target % */}
                           <td className="py-2 px-2.5 align-middle border-r border-slate-200 font-mono text-slate-600">
-                            {ind.targetDisplay}
+                            {usesDo ? ind.do2026?.targetDisplay ?? '-' : ind.targetDisplay}
                           </td>
 
                           {/* Satuan */}
                           <td className="py-2 px-2.5 align-middle border-r border-slate-200 text-slate-500">
-                            {ind.satuan}
+                            {usesDo ? ind.do2026?.denominatorLabel ?? '-' : ind.satuan}
                           </td>
 
                           {/* Total Sasaran */}
                           <td className="py-2 px-2.5 text-right align-middle border-r border-slate-200 font-mono text-slate-600">
                             {periodTotalSasaran?.toFixed(1) ?? '-'}
+                            {usesDo && rec.effectiveDenominator != null && rec.effectiveDenominator !== periodTotalSasaran && <p className="text-[10px] font-sans">D efektif: {rec.effectiveDenominator}</p>}
                           </td>
 
                           {/* Target Sasaran */}
@@ -731,11 +758,11 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
                               isLocked 
                                 ? `Terkunci (${lockState.status})` 
                                 : isQuarterMode 
-                                ? 'Akumulasi otomatis Triwulan. Beralih ke Mode Bulanan untuk mengedit.' 
+                                ? 'Hasil triwulan sesuai versi dan basis data. Beralih ke Mode Bulanan untuk mengedit.'
                                 : 'Klik untuk edit nilai'
                             }
                           >
-                            {isEditing ? (
+                            {isEditing && !ind.do2026 ? (
                               <div className="flex items-center justify-end gap-1">
                                 <input
                                   aria-label={`Realisasi ${officialCode}`}
@@ -764,7 +791,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
                                   {rec.pencapaianRiil ?? '-'}{(rec as typeof rec & { isMissing?: boolean }).isMissing ? ' (Belum diisi)' : ''}
                                 </span>
                                 <span className="text-[10px] text-slate-400 font-sans ml-1 font-normal">
-                                  {ind.satuan}
+                                  {usesDo ? 'N aktual' : ind.satuan}
                                 </span>
                               </div>
                             )}
@@ -772,12 +799,13 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
 
                           {/* Capaian Riil % */}
                           <td className="py-2 px-2.5 text-right font-mono text-slate-700 align-middle text-[11px]">
-                            {rec.capaianRiilPct == null ? '-' : `${rec.capaianRiilPct}%`}
+                            {usesDo ? measurementText(rec.measurementValue, rec.measurementUnit) : rec.capaianRiilPct == null ? '-' : `${rec.capaianRiilPct}%`}
                           </td>
 
                           {/* Nilai Kinerja */}
                           <td className="py-2 px-2.5 text-center align-middle border-r border-slate-200">
-                            {rec.nilaiKinerja == null ? '-' : <ScoreBadge score={rec.nilaiKinerja} size="sm" />}
+                            {usesDo && rec.targetMet != null && <p className="text-[10px] text-slate-600">{rec.targetMet ? 'Target tercapai' : 'Target belum tercapai'}</p>}
+                            {rec.nilaiKinerja == null ? <span className="text-[11px] text-slate-500">{rec.reason ?? (usesDo ? ind.do2026?.reason ?? 'Belum dinilai' : '-')}</span> : <ScoreBadge score={rec.nilaiKinerja} size="sm" provisional={usesDo} />}
                           </td>
 
                           {/* PIC Pengelola */}

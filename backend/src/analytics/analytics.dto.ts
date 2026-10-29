@@ -19,6 +19,11 @@ export class TrendQuery extends AnalyticsQuery {
   klasterId = 0;
 }
 
+export class PeriodRecapQuery extends AnalyticsQuery {
+  @Type(() => Number) @IsInt() @Min(1) @Max(12)
+  endMonth!: number;
+}
+
 export class DashboardQuery extends Sheet7Query {
   @IsOptional() @Transform(({ value }) => value === 'true' ? true : value === 'false' ? false : value) @IsIn([true, false])
   compare = false;

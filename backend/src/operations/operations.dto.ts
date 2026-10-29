@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
-import { ArrayMaxSize, ArrayMinSize, ArrayUnique, IsArray, IsBoolean, IsDateString, IsEmail, IsEnum, IsInt, IsNumber, IsString, IsUUID, Length, Matches, Max, MaxLength, Min, MinLength, ValidateIf, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, ArrayUnique, IsArray, IsBoolean, IsDateString, IsEmail, IsEnum, IsIn, IsInt, IsNumber, IsString, IsUUID, Length, Matches, Max, MaxLength, Min, MinLength, ValidateIf, ValidateNested } from 'class-validator';
 import { UserStatus } from '@prisma/client';
 
 // Optional fields reject null unless the API explicitly supports clearing a value.
@@ -130,6 +130,9 @@ export class AssignmentDto extends YearQuery {
 export class MonthlyRecordDto {
   @ApiProperty() @IsString() @Length(1, 100) indicatorId!: string;
   @ApiProperty({ minimum: 0, maximum: 999999999 }) @Type(() => Number) @IsNumber({ maxDecimalPlaces: 4, allowNaN: false, allowInfinity: false }) @Min(0) @Max(999999999) pencapaianRiil!: number;
+  @ApiPropertyOptional({ enum: ['ILP_2026_V1', 'DO_2026_V2'] }) @Optional() @IsIn(['ILP_2026_V1', 'DO_2026_V2']) scoringVersion?: 'ILP_2026_V1' | 'DO_2026_V2';
+  @ApiPropertyOptional({ enum: ['PERIOD_ACTUAL', 'YTD_ACTUAL'] }) @Optional() @IsIn(['PERIOD_ACTUAL', 'YTD_ACTUAL']) inputBasis?: 'PERIOD_ACTUAL' | 'YTD_ACTUAL';
+  @ApiPropertyOptional({ minimum: 0, maximum: 999999999 }) @Optional() @IsNumber({ maxDecimalPlaces: 4, allowNaN: false, allowInfinity: false }) @Min(0) @Max(999999999) totalSasaran?: number;
   @ApiPropertyOptional() @Optional() @IsString() @MaxLength(4000) notes?: string;
   @ApiPropertyOptional({ format: 'uuid', nullable: true }) @ValidateIf((_object, value: unknown) => value !== undefined && value !== null) @IsUUID() evidenceId?: string | null;
 }

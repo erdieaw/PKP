@@ -154,13 +154,18 @@ export class ExportService implements OnModuleInit, OnModuleDestroy {
   private lines(summary: Summary, generatedAt: string): string[] {
     return [
       'Sheet 7 - Penilaian Kinerja Puskesmas',
+      summary.reportingPolicy.operatingMode === 'INTERNAL_PHASED' ? 'EVALUASI INTERNAL - BUKAN PENILAIAN RESMI DINKES' : 'KOMPATIBILITAS HISTORIS - BUKAN PENGESAHAN REGULASI',
       `${summary.isOfficial ? 'VERIFIED' : 'PROVISIONAL'} | ${summary.puskesmasName} (${summary.puskesmasCode})`,
       `${summary.year} | ${summary.periodLabel} | Generated at: ${generatedAt}`,
       `Source: ${summary.source} | Status: ${summary.status} | Complete: ${summary.isComplete}`,
       `Scoring: ${summary.scoringVersion} | Basis: ${summary.basis}`,
+      `Classification: ${summary.classificationStatus} | Aggregation: ${summary.aggregationStatus}`,
+      `Mode: ${summary.reportingPolicy.operatingMode} | Policy: ${summary.reportingPolicy.status} | Conformity: ${summary.policyConformity} | Workflow verified: ${summary.workflowVerified}`,
+      summary.reportingPolicy.reason,
       `Overall score: ${summary.nilaiKinerjaPuskesmas ?? 'N/A'} | Category: ${summary.kategoriPKP}`,
       `Indicators: ${summary.totalIndikator} | Completion: ${summary.completionRate ?? 'N/A'}%`,
-      'Inputs evaluated at generation time, not enqueue time. Verified reports use the official period snapshot.',
+      'Inputs evaluated at generation time, not enqueue time. Verified workflow history uses its frozen snapshot; this is not regulatory approval.',
+      'Kelengkapan angka/skor bukan kelengkapan penilaian. Periode observasi, populasi, deduplikasi, jadwal dan kelayakan DO belum diverifikasi otomatis.',
       'Provisional reports are not official. No signatures or approvals are implied.',
     ];
   }
@@ -169,6 +174,9 @@ export class ExportService implements OnModuleInit, OnModuleDestroy {
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'SIPKP';
     const sheet = workbook.addWorksheet('Sheet 7');
+    const policy = workbook.addWorksheet('Policy');
+    policy.addRow(['operatingMode', 'policyStatus', 'canSubmit', 'canVerify', 'policyConformity']);
+    policy.addRow([summary.reportingPolicy.operatingMode, summary.reportingPolicy.status, summary.reportingPolicy.canSubmit, summary.reportingPolicy.canVerify, summary.policyConformity]);
     sheet.columns = [{ width: 20 }, { width: 90 }, { width: 20 }, { width: 20 }];
     for (const line of this.lines(summary, generatedAt)) { const row = sheet.addRow([line]); sheet.mergeCells(row.number, 1, row.number, 4); }
     sheet.addRow([]);
@@ -178,10 +186,20 @@ export class ExportService implements OnModuleInit, OnModuleDestroy {
       'isComplete' in row ? String(row.isComplete) : '',
     ]);
     const indicators = workbook.addWorksheet('Indicators');
-    indicators.addRow(['Indicator', 'Description', 'Achievement', 'Population', 'Target', 'Achievement %', 'Score', 'Status']);
+    indicators.addRow(['Indicator', 'Description', 'Numerator', 'Denominator / source population', 'Legacy physical target', 'Achievement %', 'Score', 'Status', 'Measurement', 'Unit', 'Scoring version', 'Input basis', 'Definition source', 'Reason', 'Effective denominator', 'Target met', 'Cumulative method', 'Arithmetic inputs available', 'Monthly missing', 'Recap revision', 'Recap source notes', 'Completion scope', 'Assessment complete', 'Observation validation']);
     for (const item of summary.indicators) indicators.addRow([
       item.indicatorId, item.indicator.indikator, item.pencapaianRiil, item.totalSasaran,
       item.targetSasaran, item.capaianRiilPct, item.nilaiKinerja, item.status,
+      item.measurementValue, item.measurementUnit, item.scoringVersion, item.inputBasis, item.do2026?.sourceRef ?? null, item.reason,
+      item.effectiveDenominator, item.targetMet,
+      'aggregationMethod' in item ? item.aggregationMethod : null,
+      'dataComplete' in item ? item.dataComplete : null,
+      'missingMonths' in item ? item.missingMonths.join(', ') : null,
+      'recapRevision' in item ? item.recapRevision : null,
+      'recapNotes' in item ? item.recapNotes : null,
+      'completionScope' in item ? item.completionScope : 'LEGACY_ARITHMETIC',
+      'assessmentComplete' in item ? item.assessmentComplete : null,
+      'observationStatus' in item ? item.observationStatus : 'NOT_ASSESSED',
     ]);
     indicators.columns.forEach(column => { column.width = 24; });
     return Buffer.from(await workbook.xlsx.writeBuffer());
@@ -199,6 +217,17 @@ export class ExportService implements OnModuleInit, OnModuleDestroy {
       for (const row of summary.rows) {
         const score = 'nilaiKlaster' in row ? row.nilaiKlaster : row.nilaiKelompok;
         doc.font(row.isKlasterHead ? 'Helvetica-Bold' : 'Helvetica').fontSize(10).text(`${row.no}  ${row.name}: ${score ?? 'N/A'}`);
+      }
+      if (summary.scoringVersion !== 'ILP_2026_V1') {
+        doc.addPage().font('Helvetica-Bold').fontSize(12).text('Pengukuran per indikator (provisional)').moveDown();
+        for (const item of summary.indicators) {
+          doc.font('Helvetica').fontSize(9).text(`${item.indicatorId}: ${item.measurementValue ?? 'N/A'} ${item.measurementUnit ?? ''}; skor ${item.nilaiKinerja ?? 'N/A'}; ${item.scoringVersion}; ${item.status}`);
+          doc.text(`Basis: ${item.inputBasis ?? 'N/A'}; N: ${item.pencapaianRiil ?? 'N/A'}; D input: ${item.totalSasaran ?? 'N/A'}; D efektif: ${item.effectiveDenominator ?? 'N/A'}; target: ${item.targetMet === null ? 'N/A' : item.targetMet ? 'tercapai' : 'belum tercapai'}`);
+          if (item.reason) doc.text(item.reason);
+          if (item.do2026) doc.text(item.do2026.sourceRef);
+          if ('aggregationMethod' in item) doc.text(`Rekap: ${item.aggregationMethod}; angka rekap tersedia: ${item.dataComplete}; bulan belum tersedia: ${item.missingMonths.join(', ') || '-'}; revisi: ${item.recapRevision}. ${item.recapNotes ?? ''}`);
+          doc.moveDown(0.3);
+        }
       }
       doc.end();
     });

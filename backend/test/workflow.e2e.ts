@@ -24,9 +24,9 @@ test('workflow: repeated target locks, transitive cascade, revision history and 
     const suffix = randomUUID();
     const center = await db.healthCenter.create({ data: { code: `wf-${suffix}`, name: `Workflow ${suffix}`, district: 'Integration' } });
     let year: number | undefined;
-    const start = randomInt(20);
-    for (let offset = 0; offset < 20; offset++) {
-      const candidate = 2060 + ((start + offset) % 20);
+    const start = randomInt(26);
+    for (let offset = 0; offset < 26; offset++) {
+      const candidate = 2000 + ((start + offset) % 26);
       try {
         await db.yearPeriod.create({ data: { year: candidate } });
         year = candidate;
@@ -35,7 +35,7 @@ test('workflow: repeated target locks, transitive cascade, revision history and 
         if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error;
       }
     }
-    assert.ok(year !== undefined, 'A fresh year in 2060-2079 is required');
+    assert.ok(year !== undefined, 'A fresh historical year in 2000-2025 is required; new 2026+ submissions are held');
     t.diagnostic(`Retained workflow fixtures: year=${year}, tenant=${center.id}`);
     const password = `Workflow-${randomUUID()}!`;
     const passwordHash = await hash(password, { type: argon2id });
@@ -74,6 +74,10 @@ test('workflow: repeated target locks, transitive cascade, revision history and 
     async function submit(body: object) { return request<Period>('POST', '/workflow/submit', 201, admin.token, body); }
     async function verify(body: object, period: Period) { return request<Period>('POST', '/workflow/verify', 201, dinkes.token, { ...body, healthCenterId: center.id, expectedRevision: period.revision }); }
     let month1 = await verify(monthly(1), await submit(monthly(1)));
+    assert.ok(month1.snapshot && typeof month1.snapshot === 'object' && !Array.isArray(month1.snapshot));
+    const snapshotSections = month1.snapshot['sections'];
+    assert.ok(Array.isArray(snapshotSections));
+    assert.equal(snapshotSections.some(section => section && typeof section === 'object' && !Array.isArray(section) && section['isActive'] === false), false, 'New snapshots must not include archived sections outside their active catalogue');
     // These submits must not attempt to update targets that month 1 already locked.
     let month2 = await verify(monthly(2), await submit(monthly(2)));
     let q1 = await verify(quarter, await submit(quarter));

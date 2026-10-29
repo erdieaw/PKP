@@ -78,9 +78,9 @@ test('real backend integration: tenant isolation, workflow, storage, exports and
     const picA = await user(Role.PIC, centerA.id);
     const picB = await user(Role.PIC, centerB.id);
     let year: number | undefined;
-    const start = randomInt(20);
-    for (let offset = 0; offset < 20; offset++) {
-      const candidate = 2080 + ((start + offset) % 20);
+    const start = randomInt(26);
+    for (let offset = 0; offset < 26; offset++) {
+      const candidate = 2000 + ((start + offset) % 26);
       try {
         await db.yearPeriod.create({ data: { year: candidate } });
         year = candidate;
@@ -89,7 +89,7 @@ test('real backend integration: tenant isolation, workflow, storage, exports and
         if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error;
       }
     }
-    assert.ok(year !== undefined, 'A fresh global year in 2080-2099 is required; existing years must not be modified');
+    assert.ok(year !== undefined, 'A fresh historical year in 2000-2025 is required; new 2026+ submissions are held');
     t.diagnostic(`Retained fixtures: year=${year}, tenants=${centerA.id},${centerB.id}`);
 
     t.diagnostic('Authentication and explicit tenant boundaries');
@@ -311,7 +311,7 @@ test('real backend integration: tenant isolation, workflow, storage, exports and
     const syncBefore = await db.monthlyRecord.findMany({ where: { healthCenterId: centerA.id, year }, select: { id: true, syncStatus: true }, orderBy: { id: 'asc' } });
     const bridge = await request<{ enabled: boolean; status: string }>('GET', '/bridge/status', 200, a.accessToken);
     assert.equal(bridge.enabled, false);
-    assert.equal(bridge.status, 'CONFIGURATION_REQUIRED');
+    assert.equal(bridge.status, 'DISABLED');
     await request('POST', '/bridge/sync-batch', 503, a.accessToken, { year });
     assert.deepEqual(await db.monthlyRecord.findMany({ where: { healthCenterId: centerA.id, year }, select: { id: true, syncStatus: true }, orderBy: { id: 'asc' } }), syncBefore);
     assert.ok(syncBefore.every(record => record.syncStatus === 'NOT_SYNCED'));

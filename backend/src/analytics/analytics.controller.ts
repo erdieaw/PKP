@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Role } from '@prisma/client';
 import { Actor, CurrentActor } from '../core/auth.decorators';
 import { requireRoles, tenantFor } from '../core/tenant';
-import { DashboardQuery, Sheet7Query, TrendQuery } from './analytics.dto';
+import { DashboardQuery, PeriodRecapQuery, Sheet7Query, TrendQuery } from './analytics.dto';
 import { AnalyticsService } from './analytics.service';
 
 @ApiTags('Analytics')
@@ -12,6 +12,11 @@ import { AnalyticsService } from './analytics.service';
 @UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true, forbidUnknownValues: true, transformOptions: { enableImplicitConversion: false } }))
 export class AnalyticsController {
   constructor(private readonly analytics: AnalyticsService) {}
+
+  @Get('analytics/period-recap')
+  periodRecap(@CurrentActor() actor: Actor, @Query() query: PeriodRecapQuery) {
+    return this.analytics.periodRecap(tenantFor(actor, query.healthCenterId), query.year, query.endMonth);
+  }
 
   @Get('analytics/sheet7')
   sheet7(@CurrentActor() actor: Actor, @Query() query: Sheet7Query) {

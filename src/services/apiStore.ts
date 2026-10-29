@@ -1,5 +1,6 @@
 import { api, ApiError, type SessionTokens } from './apiClient';
 import { compareIndicators } from './indicatorOrder';
+import type { SavePeriodRecap } from '../types/do2026';
 import type {
   AuthUser, UserRole, OfficialIndicator, PicUser, AdminPuskesmasUser, YearPeriod,
   HealthCenter, AuditLogEntry, IndicatorAnnualTarget, MonthlyRecord,
@@ -466,6 +467,7 @@ class ApiStore {
     if (!sheet) throw new Error('Analitik belum dimuat untuk periode ini.');
     return sheet;
   };
+  getReportingPolicy = () => this.state.sheets[1]?.reportingPolicy;
   getAnnualTrendData = (year = this.state.year): AnnualTrendData => {
     if (year !== this.state.year || !this.state.trend) throw new Error('Tren tahunan belum dimuat.');
     return this.state.trend;
@@ -546,7 +548,8 @@ class ApiStore {
     }
     return result;
   }
-  saveRecord = (indicatorId: string, month: number, data: { pencapaianRiil: number; notes?: string; evidenceId?: string | null }, year = this.state.year) => this.mutate('/records/monthly', 'PUT', { year, month, records: [{ indicatorId, ...data }] }, 'month');
+  savePeriodRecap = (recap: SavePeriodRecap) => this.mutate('/records/period-recaps', 'PUT', recap, 'all');
+  saveRecord = (indicatorId: string, month: number, data: { pencapaianRiil: number; notes?: string; evidenceId?: string | null; scoringVersion?: 'ILP_2026_V1' | 'DO_2026_V2'; inputBasis?: 'PERIOD_ACTUAL' | 'YTD_ACTUAL'; totalSasaran?: number }, year = this.state.year) => this.mutate('/records/monthly', 'PUT', { year, month, records: [{ indicatorId, ...data }] }, 'month');
   updateMonthlyInput = (id: string, month: number, realisasi: number, notes?: string, evidenceId?: string, year = this.state.year) => this.saveRecord(id, month, { pencapaianRiil: realisasi, notes, evidenceId }, year);
   updateAnnualTarget = (indicatorId: string, targetPct: number, totalSasaran: number, year = this.state.year) => this.saveAnnualTargetsBulk([{ indicatorId, targetPct, totalSasaran }], year);
   saveAnnualTargetsBulk = (targets: { indicatorId: string; targetPct: number; totalSasaran: number }[], year = this.state.year) => {

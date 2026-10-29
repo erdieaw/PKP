@@ -8,6 +8,8 @@ import { OperationsModule } from './operations/operations.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { IntegrationsModule } from './integrations/integrations.module';
 import { MastersModule } from './master/masters.module';
+import { DefinitionsModule } from './definitions/definitions.module';
+import { RecapsModule } from './recaps/recaps.module';
 
 @Controller()
 class HealthController {
@@ -16,7 +18,7 @@ class HealthController {
 }
 
 @Module({
-  imports: [CoreModule, AuthModule, OperationsModule, AnalyticsModule, IntegrationsModule, MastersModule],
+  imports: [CoreModule, AuthModule, OperationsModule, AnalyticsModule, IntegrationsModule, MastersModule, DefinitionsModule, RecapsModule],
   controllers: [HealthController],
   providers: [
     { provide: APP_GUARD, useClass: AuthGuard },

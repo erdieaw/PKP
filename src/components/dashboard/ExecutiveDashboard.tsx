@@ -32,7 +32,7 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
     const rec = pkpStore.getMonthlyRecord(ind.id, selectedMonth);
     return {
       klasterId: ind.klasterId,
-      score: !rec.isMissing && typeof rec.nilaiKinerja === 'number' && Number.isFinite(rec.nilaiKinerja) ? rec.nilaiKinerja : null,
+      score: rec.scoringVersion !== 'DO_2026_V2' && !rec.isMissing && typeof rec.nilaiKinerja === 'number' && Number.isFinite(rec.nilaiKinerja) ? rec.nilaiKinerja : null,
       hasInput: !rec.isMissing && typeof rec.pencapaianRiil === 'number' && Number.isFinite(rec.pencapaianRiil)
     };
   });
@@ -62,6 +62,7 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
 
   return (
     <div className="space-y-6">
+      <p className="text-xs text-slate-600">Kategori/distribusi 91/81 hanya untuk kompatibilitas V1. Observasi DO 2026 tidak dimasukkan ke kategori tersebut; pengukuran dan status provisional dapat dilihat pada Input Capaian.</p>
       {/* Top Banner: Total Performance Score */}
       <div className="bg-gradient-to-br from-obsidian-950 via-obsidian-900 to-emerald-950/90 rounded-3xl p-6 sm:p-7 text-white shadow-xl border border-obsidian-800/80 relative overflow-hidden">
         {/* Subtle Ambient Radial Glow */}
@@ -159,7 +160,7 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
         <div className="p-5 border-b border-slate-100 flex items-center justify-between">
           <div>
             <h3 className="font-bold text-slate-800 text-sm">Capaian per Klaster Pelayanan (ILP)</h3>
-            <p className="text-xs text-slate-500">Evaluasi bulan {selectedMonth} berbasis instrumen resmi</p>
+            <p className="text-xs text-slate-500">Evaluasi internal bulan {selectedMonth}; kategori lama untuk kompatibilitas, bukan pengesahan aturan.</p>
           </div>
           <button 
             onClick={onNavigateToPicDashboard}

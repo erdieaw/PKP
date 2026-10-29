@@ -3,9 +3,10 @@ import React from 'react';
 interface ScoreBadgeProps {
   score: number | null | undefined;
   size?: 'sm' | 'md' | 'lg';
+  provisional?: boolean;
 }
 
-export const ScoreBadge: React.FC<ScoreBadgeProps> = ({ score, size = 'sm' }) => {
+export const ScoreBadge: React.FC<ScoreBadgeProps> = ({ score, size = 'sm', provisional = false }) => {
   const hasScore = typeof score === 'number' && Number.isFinite(score);
   const isBaik = hasScore && score >= 91;
   const isCukup = hasScore && score >= 81 && score < 91;
@@ -14,7 +15,11 @@ export const ScoreBadge: React.FC<ScoreBadgeProps> = ({ score, size = 'sm' }) =>
   let dotColor = 'bg-rose-500';
   let label = 'Kurang';
 
-  if (!hasScore) {
+  if (provisional) {
+    colorClasses = 'bg-slate-100 text-slate-700 border-slate-200';
+    dotColor = 'bg-slate-400';
+    label = 'provisional';
+  } else if (!hasScore) {
     colorClasses = 'bg-slate-100 text-slate-600 border-slate-200';
     dotColor = 'bg-slate-400';
     label = 'Belum dinilai';
@@ -37,7 +42,7 @@ export const ScoreBadge: React.FC<ScoreBadgeProps> = ({ score, size = 'sm' }) =>
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-md font-mono font-bold border ${colorClasses} ${sizeClasses}`}>
       <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
-      <span>{hasScore ? `${score.toFixed(1)}%` : '-'}</span>
+      <span>{hasScore ? `${score.toFixed(1)}${provisional ? ' poin' : '%'}` : '-'}</span>
       <span className="text-[10px] font-sans font-normal opacity-75">({label})</span>
     </span>
   );

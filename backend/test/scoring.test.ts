@@ -134,8 +134,9 @@ function fixture() {
       const month = query.where.month;
       return records.filter(record => typeof month === 'number' ? record.month === month : record.month <= month.lte);
     } },
+    periodRecap: { findMany: async () => [], count: async () => 0 },
   };
-  const db = { $transaction: async (run: (client: typeof tx) => unknown) => run(tx) } as unknown as DbService;
+  const db = { periodRecap: tx.periodRecap, $transaction: async (run: (client: typeof tx) => unknown) => run(tx) } as unknown as DbService;
   return { service: new AnalyticsService(db), healthCenterId, healthCenter, sections, indicators, targets, records, locks, calls };
 }
 
@@ -249,7 +250,7 @@ test('rounded proration matches the actual operations monthly write and live/fro
     periodLock: { findFirst: async () => null },
     indicator: { findMany: async () => [item] },
     annualTarget: { findMany: async () => [{ ...annual, totalSasaran: new Prisma.Decimal(annual.totalSasaran), targetSasaran: new Prisma.Decimal(annual.targetSasaran), targetPct: new Prisma.Decimal(annual.targetPct) }] },
-    monthlyRecord: { upsert: async ({ create }: { create: typeof saved }) => { saved = create; } },
+    monthlyRecord: { findFirst: async () => null, upsert: async ({ create }: { create: typeof saved }) => { saved = create; } },
     auditLog: { create: async () => ({}) },
   };
   const operations = new OperationsService({ $transaction: async (run: (client: typeof tx) => unknown) => run(tx) } as unknown as DbService);

@@ -5,6 +5,8 @@
  * JAMINAN: KODE PROVINSI TIDAK DIUBAH (STRICT PROVINCIAL CODE INTEGRITY)
  */
 
+import type { Do2026Profile, Do2026RecordFields } from './do2026';
+
 export type KlasterId = 1 | 2 | 3 | 4 | 5;
 
 export type TargetPolarity = 
@@ -14,6 +16,7 @@ export type TargetPolarity =
   | 'BINARY';            // Available / Not available (100 or 0)
 
 export interface OfficialIndicator {
+  readonly do2026?: Do2026Profile;
   id: string;                    // Unique identifier (e.g. K1-R8, K2-R50)
   klasterId: KlasterId;          // 1, 2, 3, 4, 5
   klasterName: string;          // Klaster Pelayanan Manajemen, dll.
@@ -87,7 +90,7 @@ export interface PicAssignment {
 
 export type ElementSyncStatus = 'SYNCED' | 'PENDING_SYNC' | 'NOT_SYNCED';
 
-export interface MonthlyRecord {
+export interface MonthlyRecord extends Do2026RecordFields {
   pencapaianRiil: number;       // Input numerator bulan berjalan
   capaianRiilPct: number;       // Realisasi terhadap Total Sasaran (%)
   nilaiKinerja: number;         // Skor kinerja akhir (0 - 100)
@@ -179,6 +182,14 @@ export interface Sheet7Row {
 }
 
 export interface Sheet7OfficialSummary {
+  readonly reportingPolicy?: { readonly status: string; readonly operatingMode?: 'INTERNAL_PHASED' | 'HISTORICAL_COMPATIBILITY'; readonly canSubmit: boolean; readonly canVerify: boolean; readonly reason: string };
+  readonly workflowVerified?: boolean;
+  readonly policyConformity?: 'NOT_ASSESSED';
+  readonly isOfficial?: boolean;
+  readonly isComplete?: boolean;
+  readonly scoringVersion?: string;
+  readonly classificationStatus?: string;
+  readonly aggregationStatus?: string;
   year: number;
   periodLabel: string;
   puskesmasName: string;

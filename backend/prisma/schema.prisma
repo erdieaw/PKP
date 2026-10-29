@@ -63,6 +63,7 @@ model HealthCenter {
   annualTargets   AnnualTarget[]
   picAssignments  PicAssignment[]
   monthlyRecords  MonthlyRecord[]
+  periodRecaps    PeriodRecap[]
   periodLocks     PeriodLock[]
   uploads         Upload[]
   recommendations Recommendation[]
@@ -97,6 +98,8 @@ model User {
   auditLogs       AuditLog[]
   exportJobs      ExportJob[]
 
+  updatedRecaps   PeriodRecap[]
+
   @@index([healthCenterId, role])
   @@map("users")
 }
@@ -125,6 +128,7 @@ model YearPeriod {
   annualTargets   AnnualTarget[]
   picAssignments  PicAssignment[]
   monthlyRecords  MonthlyRecord[]
+  periodRecaps    PeriodRecap[]
   periodLocks     PeriodLock[]
   recommendations Recommendation[]
 
@@ -179,10 +183,33 @@ model Indicator {
   annualTargets        AnnualTarget[]
   picAssignments       PicAssignment[]
   monthlyRecords       MonthlyRecord[]
+  periodRecaps         PeriodRecap[]
   provinceMappings     ProvinceMapping[]
 
   @@index([sectionCode, isActive])
   @@map("indicators")
+}
+
+model OperationalDefinition {
+  definitionId   String
+  version        String
+  indicatorId    String
+  year           Int
+  definition     String
+  calculation    String
+  dataSource     String?
+  notes          String?
+  targetDisplay  String
+  sourceRef      String
+  sourceHash     String
+  sourceFile     String
+  sourceRecord   Json
+  createdAt      DateTime @default(now())
+
+  @@id([definitionId, version])
+  @@unique([indicatorId, version])
+  @@index([year, indicatorId])
+  @@map("operational_definitions")
 }
 
 model AnnualTarget {
@@ -237,6 +264,7 @@ model MonthlyRecord {
   capaianRiilPct  Decimal?     @db.Decimal(14, 4)
   nilaiKinerja    Decimal?     @db.Decimal(14, 4)
   scoringVersion  String
+  inputBasis      String       @default("MONTHLY_DELTA")
   evidenceId      String?      @db.Uuid
   evidence        Upload?      @relation(fields: [evidenceId], references: [id], onDelete: Restrict)
   notes           String?
@@ -250,6 +278,32 @@ model MonthlyRecord {
   @@index([year])
   @@index([evidenceId])
   @@map("monthly_records")
+}
+
+model PeriodRecap {
+  id             String       @id @default(uuid()) @db.Uuid
+  healthCenterId String       @db.Uuid
+  healthCenter   HealthCenter @relation(fields: [healthCenterId], references: [id], onDelete: Restrict)
+  indicatorId    String
+  indicator      Indicator    @relation(fields: [indicatorId], references: [id], onDelete: Restrict)
+  year           Int
+  yearPeriod     YearPeriod   @relation(fields: [year], references: [year], onDelete: Restrict)
+  endMonth       Int
+  numerator      Decimal      @db.Decimal(14, 4)
+  denominator    Decimal      @db.Decimal(14, 4)
+  notes          String
+  confirmed      Boolean
+  revision       Int          @default(1)
+  scoringVersion String       @default("DO_2026_V2")
+  updatedBy      String       @db.Uuid
+  updatedByUser  User         @relation(fields: [updatedBy], references: [id], onDelete: Restrict)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([healthCenterId, indicatorId, year, endMonth])
+  @@index([year])
+  @@index([updatedBy])
+  @@map("period_recaps")
 }
 
 model PeriodLock {
