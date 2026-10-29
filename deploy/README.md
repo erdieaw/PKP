@@ -24,8 +24,11 @@ Isi Environment dari `deploy/dokploy.env.example`, lalu lengkapi semua nilai waj
 - `PROVINCE_CREDENTIAL_KEY`: canonical base64 dari tepat 32 byte acak, misalnya `openssl rand -base64 32`. Pertahankan key jika memindahkan data terenkripsi existing, simpan backup terpisah. Jangan rotasi tanpa prosedur migrasi kredensial.
 - `MINIO_ACCESS_KEY` minimal 3 karakter dan `MINIO_SECRET_KEY` minimal 8 karakter; gunakan secret panjang acak. Template ini, seperti stack lokal, masih memakai akun root MinIO untuk app. Untuk hardening produksi, pisahkan akun runtime berpolicy least-privilege.
 - `FRONTEND_URL`, `MINIO_ENDPOINT`, dan `MINIO_PUBLIC_ENDPOINT` diturunkan otomatis oleh Compose dari domain dan nama service, bukan dari URL lokal di `backend/.env`.
+- `TURNSTILE_SITE_KEY` dan `TURNSTILE_SECRET_KEY`: buat widget **Managed** di Cloudflare Turnstile, daftarkan hostname `pkp.pkm-ujungpangkah.online` (tanpa scheme/path), lalu isi pasangan key asli. Jika domain diganti, sesuaikan hostname widget. Dokploy mewajibkan Turnstile; dummy test keys ditolak dalam production. Izinkan koneksi keluar backend ke `https://challenges.cloudflare.com`.
 
 Jangan salin `backend/.env` lokal mentah ke server: hostname/port internal berbeda. Jangan tampilkan output `docker compose config` penuh di log publik karena memuat secret; pakai `config --quiet`.
+
+Frontend mengambil **site key publik saja** dari `/api/v1/auth/login-config` saat membuka login, sehingga tidak memerlukan key dalam `VITE_*` atau rebuild frontend saat rotasi key. Secret hanya dikirim backend ke Siteverify Cloudflare. Backend memvalidasi hostname sesuai `FRONTEND_URL` dan action `login` sebelum memeriksa akun; token sekali pakai berlaku maksimal lima menit. Gagal/missing/expired token ditolak 422; gangguan verifier ditolak 503, tidak melewati verifikasi. Rate limit login tetap berlaku. Refresh sesi tidak meminta challenge. Jika menerapkan CSP sendiri, izinkan script dan frame `https://challenges.cloudflare.com` sesuai panduan Cloudflare; jangan self-host/cache script widget.
 
 ## IP Proxy Dan Rate Limit
 

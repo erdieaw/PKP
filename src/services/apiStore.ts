@@ -121,11 +121,11 @@ class ApiStore {
     return { ...row, roleLabel: roleLabels[row.role as UserRole], healthCenterId: row.healthCenterId ?? undefined, healthCenterName: row.healthCenter?.name ?? this.state.centers.find(c => c.id === row.healthCenterId)?.name, avatarColor: 'bg-emerald-600' } as AuthUser;
   }
   // Sessions last for this browser tab only. The legacy remember argument does not persist credentials.
-  async authenticate(username: string, password: string): Promise<AuthUser | null> {
+  async authenticate(username: string, password: string, turnstileToken?: string): Promise<AuthUser | null> {
     this.clear();
     api.clearSession();
     const epoch = this.generation;
-    const response = await api.login<SessionTokens & { user: Wire }>(username, password);
+    const response = await api.login<SessionTokens & { user: Wire }>(username, password, undefined, turnstileToken);
     if (epoch !== this.generation) throw new ApiError(401, 'Sesi telah berubah.');
     const user = this.userView(response.user);
     this.commit({ user });

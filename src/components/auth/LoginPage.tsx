@@ -3,6 +3,7 @@ import { ArrowRight, Eye, EyeOff, LoaderCircle, Pause, Play } from 'lucide-react
 import { pkpStore } from '../../services/apiStore';
 import { ApiError } from '../../services/apiClient';
 import { AuthUser } from '../../types/pkp';
+import { TurnstileChallenge } from './TurnstileChallenge';
 import './login.css';
 
 interface LoginPageProps {
@@ -17,6 +18,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [motionPaused, setMotionPaused] = useState(false);
+  const [challenge, setChallenge] = useState({ ready: false, token: '' });
+  const [challengeReset, setChallengeReset] = useState(0);
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -26,21 +29,29 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
       setErrorMessage('Isi username dan kata sandi Anda.');
       return;
     }
+    if (!challenge.ready) {
+      setErrorMessage('Selesaikan verifikasi keamanan sebelum masuk.');
+      return;
+    }
     setLoading(true);
     try {
-      const user = await pkpStore.authenticate(username.trim(), password);
+      const user = await pkpStore.authenticate(username.trim(), password, challenge.token || undefined);
       if (!user) throw new ApiError(401, 'Username atau kata sandi salah.');
       onLoginSuccess(user);
     } catch (error) {
       const status = error instanceof ApiError ? error.status : undefined;
       setErrorMessage(status === 401 || status === 403
         ? 'Username atau kata sandi salah. Periksa kembali dan coba lagi. Jika tetap tidak bisa masuk, hubungi administrator.'
+        : status === 422
+          ? 'Verifikasi keamanan tidak valid atau kedaluwarsa. Silakan verifikasi kembali.'
         : status === 429
           ? 'Terlalu banyak percobaan masuk. Tunggu beberapa saat, lalu coba lagi.'
           : status === 0
             ? 'Tidak dapat terhubung ke server. Periksa koneksi internet Anda, lalu coba lagi.'
             : 'Tidak dapat masuk karena terjadi gangguan. Silakan coba lagi nanti.');
     } finally {
+      setChallenge({ ready: false, token: '' });
+      setChallengeReset(value => value + 1);
       setLoading(false);
     }
   };
@@ -141,9 +152,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
             {isCapsLockOn && <p id="login-caps-lock" role="status" className="mt-2 text-sm text-amber-800">Caps Lock aktif.</p>}
           </div>
 
+          <TurnstileChallenge resetKey={challengeReset} onChange={setChallenge} />
+
           {errorMessage && <p id="login-error" role="alert" className="text-sm leading-relaxed text-red-800">{errorMessage}</p>}
 
-           <button type="submit" disabled={loading} className="login-submit">
+           <button type="submit" disabled={loading || !challenge.ready} className="login-submit">
             <span>{loading ? 'Sedang masuk...' : 'Masuk'}</span>
             {loading ? <LoaderCircle className="login-spinner" size={18} aria-hidden="true" /> : <ArrowRight size={18} aria-hidden="true" />}
           </button>

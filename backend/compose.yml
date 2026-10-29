@@ -48,6 +48,8 @@ services:
     env_file: .env
     environment:
       NODE_ENV: production
+      # Local-only stack; configured keys are still verified when present.
+      TURNSTILE_REQUIRED: 'false'
       PORT: 4000
       DATABASE_URL: postgresql://${POSTGRES_USER:?Set POSTGRES_USER}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-sipkp}?schema=public
       REDIS_URL: redis://redis:6379

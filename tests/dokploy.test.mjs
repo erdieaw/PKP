@@ -15,6 +15,8 @@ const env = {
   PROVINCE_CREDENTIAL_KEY: Buffer.alloc(32).toString('base64'),
   MINIO_ACCESS_KEY: 'test-key', MINIO_SECRET_KEY: 'test-only-secret',
   TRAEFIK_TRUSTED_PROXY: '192.0.2.10',
+  TURNSTILE_SITE_KEY: 'fixture-public-site-key',
+  TURNSTILE_SECRET_KEY: 'fixture-server-only-secret',
 };
 
 function config(overrides = {}) {
@@ -53,6 +55,9 @@ test('Dokploy routes only frontend and storage, keeps secrets out of FE, and iso
   assert.equal(frontend.depends_on.app.condition, 'service_healthy');
   assert.ok(app.healthcheck.test.join(' ').includes('/api/v1/health/ready'));
   assert.equal(app.environment.FRONTEND_URL, 'https://pkp.pkm-ujungpangkah.online');
+  assert.equal(app.environment.TURNSTILE_REQUIRED, 'true');
+  assert.equal(app.environment.TURNSTILE_SITE_KEY, env.TURNSTILE_SITE_KEY);
+  assert.equal(app.environment.TURNSTILE_SECRET_KEY, env.TURNSTILE_SECRET_KEY);
   assert.equal(app.environment.MINIO_ENDPOINT, 'http://minio:9000');
   assert.equal(app.environment.MINIO_PUBLIC_ENDPOINT, 'https://pkp-storage.pkm-ujungpangkah.online');
   assert.equal(minio.environment.MINIO_API_CORS_ALLOW_ORIGIN, app.environment.FRONTEND_URL);
@@ -60,7 +65,7 @@ test('Dokploy routes only frontend and storage, keeps secrets out of FE, and iso
 
 test('Dokploy refuses missing required values and domain/IP overrides stay consistent', () => {
   for (const name of ['COMPOSE_PROJECT_NAME', 'DATABASE_URL', 'REDIS_URL', 'POSTGRES_PASSWORD', 'REDIS_PASSWORD', 'JWT_SECRET',
-    'PROVINCE_CREDENTIAL_KEY', 'MINIO_ACCESS_KEY', 'MINIO_SECRET_KEY', 'TRAEFIK_TRUSTED_PROXY']) {
+    'PROVINCE_CREDENTIAL_KEY', 'MINIO_ACCESS_KEY', 'MINIO_SECRET_KEY', 'TRAEFIK_TRUSTED_PROXY', 'TURNSTILE_SITE_KEY', 'TURNSTILE_SECRET_KEY']) {
     const result = config({ [name]: '' });
     assert.notEqual(result.status, 0, `${name} must be required`);
   }

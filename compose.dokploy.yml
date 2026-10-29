@@ -5,6 +5,9 @@ x-backend-environment: &backend-environment
   PORT: 4000
   FRONTEND_URL: https://${PKP_DOMAIN:-pkp.pkm-ujungpangkah.online}
   ENABLE_SWAGGER: 'false'
+  TURNSTILE_REQUIRED: 'true'
+  TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:?Set the public Turnstile site key}
+  TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:?Set the server-only Turnstile secret key}
   DATABASE_URL: ${DATABASE_URL:?Set internal DATABASE_URL with encoded credentials}
   REDIS_URL: ${REDIS_URL:?Set internal REDIS_URL with encoded credentials}
   JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}

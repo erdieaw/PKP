@@ -111,11 +111,12 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
 export const api = {
   request, setSession, clearSession, refresh,
+  loginConfig: (signal: AbortSignal) => send<{ turnstileEnabled: boolean; turnstileSiteKey: string | null }>('/auth/login-config', { signal }, null),
   hasSession: () => Boolean(refreshToken()),
-  async login<T extends SessionTokens>(username: string, password: string, role?: string): Promise<T> {
+  async login<T extends SessionTokens>(username: string, password: string, role?: string, turnstileToken?: string): Promise<T> {
     clearSession();
     const epoch = generation;
-    const result = await request<T>('/auth/login', { method: 'POST', body: { username, password, role } });
+    const result = await request<T>('/auth/login', { method: 'POST', body: { username, password, role, turnstileToken } });
     if (epoch !== generation) throw new ApiError(401, 'Sesi telah berubah.');
     setSession(result);
     return result;
