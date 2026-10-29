@@ -1,7 +1,8 @@
 import { CanActivate, ExecutionContext, HttpException, Injectable, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Role } from '@prisma/client';
-import { Request } from 'express';
+import { Request, Response } from 'express';
+import { getConfig } from '../config';
 import { Actor, PUBLIC_KEY, ROLES_KEY } from '../core/auth.decorators';
 import { RedisService } from '../core/redis.service';
 import { requireRoles } from '../core/tenant';
@@ -37,23 +38,34 @@ export class RolesGuard implements CanActivate {
 
 @Injectable()
 export class RateLimitGuard implements CanActivate {
+  private readonly limits = getConfig().rateLimits;
   constructor(private readonly redis: RedisService) {}
   async canActivate(context: ExecutionContext) {
     const request = context.switchToHttp().getRequest<AuthRequest>();
     const path = request.route?.path as string | undefined;
     if (path === '/api/v1/health' && request.method === 'GET') return true;
     const login = path === '/api/v1/auth/login' && request.method === 'POST';
-    const limit = login ? 5 : 120;
-    const key = `rate:${login ? 'login' : 'operations'}:${request.actor?.id ?? request.ip ?? 'unknown'}`;
+    const read = request.method === 'GET' || request.method === 'HEAD';
+    const bucket = login ? 'login' : !request.actor ? 'public' : read ? 'read' : 'write';
+    const limit = this.limits[bucket];
+    const key = `rate:${bucket}:${request.actor?.id ?? request.ip ?? 'unknown'}`;
     let count: number;
+    let retryAfter: number;
     try {
-      count = Number(await this.redis.client.eval(
-        "local n = redis.call('INCR', KEYS[1]); if n == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end; return n",
+      const result = await this.redis.client.eval(
+        "local n = redis.call('INCR', KEYS[1]); if n == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end; return {n, redis.call('TTL', KEYS[1])}",
         1, key, 60,
-      ));
-      if (!Number.isFinite(count)) throw new Error();
+      );
+      if (!Array.isArray(result) || result.length !== 2) throw new Error();
+      count = Number(result[0]);
+      const ttl = Number(result[1]);
+      if (!Number.isInteger(count) || count < 1 || !Number.isInteger(ttl) || ttl < 0 || ttl > 60) throw new Error();
+      retryAfter = Math.max(1, ttl);
     } catch { throw new ServiceUnavailableException('Rate limiter unavailable'); }
-    if (count > limit) throw new HttpException('Too many requests', 429);
+    if (count > limit) {
+      context.switchToHttp().getResponse<Response>().setHeader('Retry-After', retryAfter);
+      throw new HttpException('Too many requests', 429);
+    }
     return true;
   }
 }

@@ -32,6 +32,12 @@ export function getConfig() {
     jwtSecret: required('JWT_SECRET', 32),
     accessTokenSeconds: integer('ACCESS_TOKEN_SECONDS', 900, 86400),
     refreshTokenDays: integer('REFRESH_TOKEN_DAYS', 7, 365),
+    rateLimits: {
+      login: integer('RATE_LIMIT_LOGIN_PER_MINUTE', 5, 100),
+      read: integer('RATE_LIMIT_READ_PER_MINUTE', 600, 10000),
+      write: integer('RATE_LIMIT_WRITE_PER_MINUTE', 120, 10000),
+      public: integer('RATE_LIMIT_PUBLIC_PER_MINUTE', 120, 10000),
+    },
     minioEndpoint: url('MINIO_ENDPOINT', 'http://127.0.0.1:59000', ['http:', 'https:']),
     minioPublicEndpoint: url('MINIO_PUBLIC_ENDPOINT', 'http://127.0.0.1:59000', ['http:', 'https:']),
     minioAccessKey: required('MINIO_ACCESS_KEY', 3),

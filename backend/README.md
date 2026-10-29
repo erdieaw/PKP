@@ -93,6 +93,8 @@ Migrasikan DB dan lakukan seed yang memang disetujui **dari host terlebih dahulu
 docker compose --env-file backend/.env -f backend/compose.yml --profile app up -d --build
 ```
 
+Profil `app` juga menjalankan frontend Nginx di `http://localhost:8080` (port dapat diubah melalui `FRONTEND_PORT`), dengan proxy same-origin ke API. Frontend dibangun memakai frozen `bun.lock`; backend tetap memakai `npm ci`. Untuk rebuild aplikasi tanpa me-restart dependency yang sudah sehat, lihat bagian deployment Docker di README root. Jangan jalankan seed ulang atau hapus volume untuk deployment existing.
+
 Compose override alamat internal aplikasi menjadi `postgres:5432`, `redis:6379`, `http://minio:9000`; pertahankan alamat loopback published port pada env host untuk CLI migrasi. `MINIO_PUBLIC_ENDPOINT` **tidak** dioverride: tetap harus alamat yang dapat dijangkau browser, bukan `http://minio:9000` untuk browser host.
 
 URL PostgreSQL internal Compose menginterpolasi username/password **tanpa URL encoding**. Jika kredensial mengandung karakter reserved URL, override `app.environment.DATABASE_URL` dengan URL internal yang sudah di-encode melalui konfigurasi lokal operator; jangan mengubahnya menjadi password lemah untuk menghindari encoding.
@@ -157,7 +159,9 @@ Runner [run-browser-e2e.mjs](../tests/run-browser-e2e.mjs) membuat password acak
 - [session-browser.e2e.mjs](../tests/session-browser.e2e.mjs): JWT expired sungguhan dengan signature valid (bukan mock HTTP), refresh/retry, pending-write scope guard, logout, password-change revocation dan stale-refresh isolation.
 - [master-browser.e2e.mjs](../tests/master-browser.e2e.mjs): **terpisah, belum masuk runner gabungan**. Run final lulus CRUD global Admin/Dinkes, visibilitas lintas Puskesmas, reset PIC, revoke session lama, password lama401/login baru200, cleanup arsip, dan console bersih.
 
-Rate limit aktual tetap login5/IP dan request lain120/actor atau IP publik per60detik; runner menunggu61detik antar suite browser. Siklus workflow sekarang memakai9 request (1 mutasi +8 read periode/target/analytics), bukan reload full scope sekitar26 request. Hindari reload penuh berulang atau test paralel yang menghabiskan budget. Coverage ini tidak membuktikan seluruh form master, bootstrap UI pertama atau seluruh viewport/security/concurrency telah diuji.
+Rate limit memakai kuota terpisah per60detik: GET/HEAD terautentikasi600/pengguna, perubahan data120/pengguna, login5/IP, dan request publik lainnya120/IP. Kuota baca tidak mengurangi kuota tulis. Konfigurasi tersedia melalui `RATE_LIMIT_READ_PER_MINUTE`, `RATE_LIMIT_WRITE_PER_MINUTE`, `RATE_LIMIT_LOGIN_PER_MINUTE`, dan `RATE_LIMIT_PUBLIC_PER_MINUTE`; semuanya bilangan bulat positif, maksimum login100 dan lainnya10000. Konfigurasi dibaca saat startup; redeploy setelah mengubahnya. Respons429 menyertakan `Retry-After` sesuai sisa TTL Redis, bukan selalu60detik. Redis gagal tetap menghasilkan503, bukan menonaktifkan proteksi. Liveness tetap bebas kuota; readiness masih memakai kuota publik.
+
+Runner menunggu61detik antar suite browser untuk kuota login. Siklus workflow sekarang memakai9 request (1 mutasi +8 read periode/target/analytics), bukan reload full scope sekitar26 request. Identifikasi IP login di balik Nginx/Dokploy masih memerlukan konfigurasi trusted proxy terbatas dan ingress yang terkontrol; menaikkan kuota bukan pengganti konfigurasi tersebut. Coverage ini tidak membuktikan seluruh form master, bootstrap UI pertama atau seluruh viewport/security/concurrency telah diuji.
 
 `npm audit` dilaporkan **0 vulnerabilities** setelah explicit overrides pada package.json/lock: js-yaml5 untuk Swagger, deepmerge-ts8 untuk Prisma config, uuid11 untuk ExcelJS. Ini override major transitive, bukan update rutin tanpa risiko: review API/kompatibilitas dan jalankan regression tests terkait pada setiap pembaruan. Audit0 bukan bukti semua perilaku/security sudah benar.
 

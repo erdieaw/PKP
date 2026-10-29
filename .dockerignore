@@ -1,0 +1,13 @@
+**
+!Dockerfile
+!nginx.conf
+!package.json
+!bun.lock
+!index.html
+!tsconfig.json
+!vite.config.ts
+!postcss.config.js
+!tailwind.config.js
+!bg.png
+!src/
+!src/**

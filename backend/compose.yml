@@ -64,6 +64,22 @@ services:
     init: true
     restart: unless-stopped
     # Migrations and any explicitly approved seed are separate operator commands.
+  frontend:
+    profiles: ['app']
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - '127.0.0.1:${FRONTEND_PORT:-8080}:8080'
+    depends_on:
+      app:
+        condition: service_started
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:8080/']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
 volumes:
   postgres_data:
   redis_data:

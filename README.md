@@ -63,15 +63,23 @@ Masuk sebagai Dinkes dengan akun bootstrap. Dinkes tanpa tenant tetap dapat memb
 
 Demo opsional hanya untuk development: `SEED_DEMO=true` dan `SEED_DEMO_PASSWORD` pilihan operator minimal 12 karakter, lalu seed ulang. Akun `demo.dinkes`, `demo.admin`, `demo.pic` dan tenant `DEMO-001` tidak memiliki password default; seed demo tidak membuat histori/skor sintetis. Detail ada di [panduan backend](backend/README.md).
 
-## Backend Container
+## Deployment Docker Lokal
 
-Setelah dependency, bucket, migrasi dan seed disiapkan dari host seperti di atas, backend dapat dijalankan dalam container **sebagai alternatif** server host (jangan menjalankan keduanya pada port 4000):
+Setelah dependency, bucket, migrasi dan provisioning yang disetujui disiapkan dari host seperti di atas, frontend dan backend dapat dijalankan dalam container **sebagai alternatif** server host (jangan menjalankan dua backend pada port 4000). Database existing tidak perlu di-seed ulang:
 
 ```bash
 docker compose --env-file backend/.env -f backend/compose.yml --profile app up -d --build
 ```
 
-Compose mengganti alamat dependency internal app; env host tetap memakai published port loopback untuk CLI migrasi. `MINIO_PUBLIC_ENDPOINT` harus tetap dapat dijangkau browser. Image runtime tidak menjalankan migrasi/seed otomatis. Compose ini scaffold development, bukan deployment produksi yang sudah hardened.
+Frontend tersedia di **http://localhost:8080**, atau port `FRONTEND_PORT` yang dikonfigurasi operator. Image frontend dibangun dengan Bun dan frozen `bun.lock`, lalu dilayani Nginx non-root dengan SPA fallback serta proxy same-origin `/api/` ke backend. Error API dan asset yang tidak ditemukan tidak diarahkan ke HTML frontend. Vite development tidak diperlukan untuk deployment ini.
+
+Untuk memperbarui hanya aplikasi ketika PostgreSQL, Redis dan MinIO sudah berjalan:
+
+```bash
+docker compose --env-file backend/.env -f backend/compose.yml --profile app up -d --build --no-deps --wait app frontend
+```
+
+Compose mengganti alamat dependency internal app; env host tetap memakai published port loopback untuk CLI migrasi. `MINIO_PUBLIC_ENDPOINT` harus tetap dapat dijangkau browser. Image runtime tidak menjalankan migrasi/seed otomatis. Jangan gunakan `down -v` untuk deployment ulang karena menghapus volume. Compose ini deployment lokal, bukan deployment produksi yang sudah hardened.
 
 ## API Dan Deployment
 
@@ -146,7 +154,9 @@ node tests/master-browser.e2e.mjs
 - [`session-browser.e2e.mjs`](tests/session-browser.e2e.mjs): JWT benar-benar expired dengan signature valid, 401/refresh/retry nyata, scope guard saat write pending, logout revocation, ganti password yang mencabut semua session, dan stale-refresh isolation. Bukan intercept HTTP atau respons auth mock.
 - [`master-browser.e2e.mjs`](tests/master-browser.e2e.mjs) dijalankan terpisah dengan perintah di atas, **belum termasuk runner gabungan**. Run final lulus seluruh flow dengan console bersih: CRUD global Admin/Dinkes, visibilitas lintas Puskesmas, reset PIC, pencabutan session lama, password lama401/password baru login200, dan cleanup melalui arsip.
 
-Rate limit tetap aktif: login 5/IP dan route lain 120/actor atau IP publik per jendela 60 detik. Runner memberi jeda 61 detik antar suite browser; hindari reload penuh berulang dan tes paralel yang menghabiskan limit bersama. Hasil terbaru yang dilaporkan: build frontend dan16 test default backend lulus, termasuk test arsip section baru;8 subtest API CRUD/reset dengan DB nyata lulus pada run terpisah setelah koreksi fixture. Dua suite backend lama lulus pada run saat fixture suite baru masih gagal; **belum ada klaim run gabungan backend terbaru seluruhnya lulus**. Delapan focused master tests dan5 operations tests berada di `src/`, di luar glob default `test/*.test.ts`; jalankan berikut dengan working directory **backend/**:
+Rate limit memakai kuota terpisah per 60 detik: baca GET/HEAD 600/pengguna, perubahan data 120/pengguna, login 5/IP, dan request publik lainnya 120/IP. Kuota baca tidak menghabiskan kuota perubahan data. Atur melalui `RATE_LIMIT_READ_PER_MINUTE`, `RATE_LIMIT_WRITE_PER_MINUTE`, `RATE_LIMIT_LOGIN_PER_MINUTE`, dan `RATE_LIMIT_PUBLIC_PER_MINUTE`, lalu restart/redeploy backend. Respons 429 menyertakan `Retry-After` dalam detik. Login berbasis IP masih memerlukan konfigurasi trusted proxy yang teruji di Dokploy; jangan mempercayai semua forwarding header. Runner tetap memberi jeda 61 detik antar suite browser untuk menjaga kuota login.
+
+Hasil terbaru yang dilaporkan: build frontend dan16 test default backend lulus, termasuk test arsip section baru;8 subtest API CRUD/reset dengan DB nyata lulus pada run terpisah setelah koreksi fixture. Dua suite backend lama lulus pada run saat fixture suite baru masih gagal; **belum ada klaim run gabungan backend terbaru seluruhnya lulus**. Delapan focused master tests dan5 operations tests berada di `src/`, di luar glob default `test/*.test.ts`; jalankan berikut dengan working directory **backend/**:
 
 ```bash
 npx tsx --test src/master/masters.test.ts src/operations/operations.service.test.ts
