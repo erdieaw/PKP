@@ -40,6 +40,7 @@ dist-ssr/
 .env.test.local
 .env.production.local
 !.env.example
+/deploy/dokploy.env
 
 # TypeScript build info
 *.tsbuildinfo

@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { isIP } from 'node:net';
 
 export function getConfig() {
   const env = process.env;
@@ -25,6 +26,11 @@ export function getConfig() {
   if (!databaseUrl) throw new Error('DATABASE_URL is required');
   const frontendUrl = url('FRONTEND_URL', 'http://localhost:3000', ['http:', 'https:']);
   if (new URL(frontendUrl).origin !== frontendUrl) throw new Error('FRONTEND_URL must be an exact origin without a path or trailing slash');
+  const trustedProxyIps = env.TRUSTED_PROXY_IPS?.trim()
+    ? env.TRUSTED_PROXY_IPS.split(',').map(value => value.trim()) : [];
+  if (trustedProxyIps.length > 16 || trustedProxyIps.some(value => !isIP(value))) {
+    throw new Error('TRUSTED_PROXY_IPS must contain at most 16 comma-separated IP addresses');
+  }
   return {
     port: integer('PORT', 4000, 65535),
     databaseUrl: url('DATABASE_URL', databaseUrl, ['postgres:', 'postgresql:']),
@@ -45,6 +51,7 @@ export function getConfig() {
     evidenceBucket: env.EVIDENCE_BUCKET ?? 'evidence',
     reportsBucket: env.REPORTS_BUCKET ?? 'reports',
     frontendUrl,
+    trustedProxyIps,
     nodeEnv,
   };
 }

@@ -87,6 +87,8 @@ Tahun aktif awal tidak dipilih otomatis oleh migration/seed. DINKES_ADMIN wajib 
 
 ## App Dalam Container
 
+Untuk Dokploy/domain publik gunakan [`compose.dokploy.yml`](../compose.dokploy.yml) dan [panduan deployment](../deploy/README.md), bukan Compose lokal di bawah. Konfigurasi ini menyediakan target tooling `ops` khusus migrasi/bucket, tanpa seed otomatis. `TRUSTED_PROXY_IPS` opsional berisi maksimal 16 alamat IP proxy eksplisit dipisahkan koma; kosong berarti header forwarding tidak dipercaya. Jangan gunakan `true`, jumlah hop, hostname atau wildcard. Stack Dokploy hanya mempercayai frontend pada bridge privat, dengan sanitasi header di Nginx.
+
 Migrasikan DB dan lakukan seed yang memang disetujui **dari host terlebih dahulu**. Runtime image non-root `node`, dependency dev dipangkas; jangan mengandalkan image runtime untuk menjalankan Prisma CLI/tsx atau seed.
 
 ```bash
@@ -161,7 +163,7 @@ Runner [run-browser-e2e.mjs](../tests/run-browser-e2e.mjs) membuat password acak
 
 Rate limit memakai kuota terpisah per60detik: GET/HEAD terautentikasi600/pengguna, perubahan data120/pengguna, login5/IP, dan request publik lainnya120/IP. Kuota baca tidak mengurangi kuota tulis. Konfigurasi tersedia melalui `RATE_LIMIT_READ_PER_MINUTE`, `RATE_LIMIT_WRITE_PER_MINUTE`, `RATE_LIMIT_LOGIN_PER_MINUTE`, dan `RATE_LIMIT_PUBLIC_PER_MINUTE`; semuanya bilangan bulat positif, maksimum login100 dan lainnya10000. Konfigurasi dibaca saat startup; redeploy setelah mengubahnya. Respons429 menyertakan `Retry-After` sesuai sisa TTL Redis, bukan selalu60detik. Redis gagal tetap menghasilkan503, bukan menonaktifkan proteksi. Liveness tetap bebas kuota; readiness masih memakai kuota publik.
 
-Runner menunggu61detik antar suite browser untuk kuota login. Siklus workflow sekarang memakai9 request (1 mutasi +8 read periode/target/analytics), bukan reload full scope sekitar26 request. Identifikasi IP login di balik Nginx/Dokploy masih memerlukan konfigurasi trusted proxy terbatas dan ingress yang terkontrol; menaikkan kuota bukan pengganti konfigurasi tersebut. Coverage ini tidak membuktikan seluruh form master, bootstrap UI pertama atau seluruh viewport/security/concurrency telah diuji.
+Runner menunggu61detik antar suite browser untuk kuota login. Siklus workflow sekarang memakai9 request (1 mutasi +8 read periode/target/analytics), bukan reload full scope sekitar26 request. Identifikasi IP login di balik Nginx/Dokploy memakai `TRUSTED_PROXY_IPS` eksplisit dan sanitasi header pada template Dokploy; operator tetap harus mengisi IP Traefik yang benar dan memvalidasi ingress server. Menaikkan kuota bukan pengganti konfigurasi tersebut. Coverage ini tidak membuktikan seluruh form master, bootstrap UI pertama atau seluruh viewport/security/concurrency telah diuji.
 
 `npm audit` dilaporkan **0 vulnerabilities** setelah explicit overrides pada package.json/lock: js-yaml5 untuk Swagger, deepmerge-ts8 untuk Prisma config, uuid11 untuk ExcelJS. Ini override major transitive, bukan update rutin tanpa risiko: review API/kompatibilitas dan jalankan regression tests terkait pada setiap pembaruan. Audit0 bukan bukti semua perilaku/security sudah benar.
 

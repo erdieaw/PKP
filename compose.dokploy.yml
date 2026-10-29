@@ -1,0 +1,186 @@
+name: ${COMPOSE_PROJECT_NAME:?Set the exact Dokploy Compose project name}
+
+x-backend-environment: &backend-environment
+  NODE_ENV: production
+  PORT: 4000
+  FRONTEND_URL: https://${PKP_DOMAIN:-pkp.pkm-ujungpangkah.online}
+  ENABLE_SWAGGER: 'false'
+  DATABASE_URL: ${DATABASE_URL:?Set internal DATABASE_URL with encoded credentials}
+  REDIS_URL: ${REDIS_URL:?Set internal REDIS_URL with encoded credentials}
+  JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
+  PROVINCE_CREDENTIAL_KEY: ${PROVINCE_CREDENTIAL_KEY:?Set PROVINCE_CREDENTIAL_KEY}
+  ACCESS_TOKEN_SECONDS: ${ACCESS_TOKEN_SECONDS:-900}
+  REFRESH_TOKEN_DAYS: ${REFRESH_TOKEN_DAYS:-7}
+  RATE_LIMIT_LOGIN_PER_MINUTE: ${RATE_LIMIT_LOGIN_PER_MINUTE:-5}
+  RATE_LIMIT_READ_PER_MINUTE: ${RATE_LIMIT_READ_PER_MINUTE:-600}
+  RATE_LIMIT_WRITE_PER_MINUTE: ${RATE_LIMIT_WRITE_PER_MINUTE:-120}
+  RATE_LIMIT_PUBLIC_PER_MINUTE: ${RATE_LIMIT_PUBLIC_PER_MINUTE:-120}
+  TRUSTED_PROXY_IPS: ${PKP_FRONTEND_PROXY_IP:-172.30.92.2}
+  MINIO_ENDPOINT: http://minio:9000
+  MINIO_PUBLIC_ENDPOINT: https://${PKP_STORAGE_DOMAIN:-pkp-storage.pkm-ujungpangkah.online}
+  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?Set MINIO_ACCESS_KEY}
+  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY}
+  EVIDENCE_BUCKET: ${EVIDENCE_BUCKET:-evidence}
+  REPORTS_BUCKET: ${REPORTS_BUCKET:-reports}
+
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dokploy
+    environment:
+      # Use Traefik's actual IP on dokploy-network, not 0.0.0.0/0.
+      TRAEFIK_TRUSTED_PROXY: ${TRAEFIK_TRUSTED_PROXY:?Set the exact Traefik IP or a tightly controlled proxy CIDR}
+      NGINX_ENVSUBST_FILTER: '^TRAEFIK_TRUSTED_PROXY'
+    networks:
+      dokploy-network:
+      proxy:
+        ipv4_address: ${PKP_FRONTEND_PROXY_IP:-172.30.92.2}
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:8080/']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dokploy-network
+      - traefik.http.routers.sipkp-fe.rule=Host(`${PKP_DOMAIN:-pkp.pkm-ujungpangkah.online}`)
+      - traefik.http.routers.sipkp-fe.entrypoints=web
+      - traefik.http.routers.sipkp-fe.service=sipkp-fe
+      - traefik.http.routers.sipkp-fe.middlewares=sipkp-https
+      - traefik.http.middlewares.sipkp-https.redirectscheme.scheme=https
+      - traefik.http.middlewares.sipkp-https.redirectscheme.permanent=true
+      - traefik.http.routers.sipkp-fe-secure.rule=Host(`${PKP_DOMAIN:-pkp.pkm-ujungpangkah.online}`)
+      - traefik.http.routers.sipkp-fe-secure.entrypoints=websecure
+      - traefik.http.routers.sipkp-fe-secure.tls=true
+      - traefik.http.routers.sipkp-fe-secure.tls.certresolver=letsencrypt
+      - traefik.http.routers.sipkp-fe-secure.service=sipkp-fe
+      - traefik.http.services.sipkp-fe.loadbalancer.server.port=8080
+
+  app:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: runtime
+    environment: *backend-environment
+    networks:
+      proxy:
+        ipv4_address: ${PKP_BACKEND_PROXY_IP:-172.30.92.3}
+      data:
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:4000/api/v1/health/ready',{signal:AbortSignal.timeout(4000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    init: true
+    restart: unless-stopped
+    labels:
+      - traefik.enable=false
+
+  postgres:
+    image: postgres:16.10-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sipkp}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    labels:
+      - traefik.enable=false
+
+  redis:
+    image: redis:7.4.5-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD}
+    command: ['sh', '-c', 'exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"']
+    volumes:
+      - redis_data:/data
+    networks:
+      - data
+    healthcheck:
+      test: ['CMD-SHELL', 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    labels:
+      - traefik.enable=false
+
+  minio:
+    image: quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    command: server /data --console-address ':9001'
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?Set MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY}
+      MINIO_API_CORS_ALLOW_ORIGIN: https://${PKP_DOMAIN:-pkp.pkm-ujungpangkah.online}
+    volumes:
+      - minio_data:/data
+    networks:
+      - data
+      - dokploy-network
+    restart: unless-stopped
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dokploy-network
+      - traefik.http.routers.sipkp-storage.rule=Host(`${PKP_STORAGE_DOMAIN:-pkp-storage.pkm-ujungpangkah.online}`)
+      - traefik.http.routers.sipkp-storage.entrypoints=web
+      - traefik.http.routers.sipkp-storage.service=sipkp-storage
+      - traefik.http.routers.sipkp-storage.middlewares=sipkp-https
+      - traefik.http.routers.sipkp-storage-secure.rule=Host(`${PKP_STORAGE_DOMAIN:-pkp-storage.pkm-ujungpangkah.online}`)
+      - traefik.http.routers.sipkp-storage-secure.entrypoints=websecure
+      - traefik.http.routers.sipkp-storage-secure.tls=true
+      - traefik.http.routers.sipkp-storage-secure.tls.certresolver=letsencrypt
+      - traefik.http.routers.sipkp-storage-secure.service=sipkp-storage
+      - traefik.http.services.sipkp-storage.loadbalancer.server.port=9000
+
+  # Explicit operator jobs only; never started by the normal deployment.
+  ops:
+    profiles: ['tools']
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: ops
+    environment:
+      <<: *backend-environment
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+    networks:
+      - data
+    restart: 'no'
+    labels:
+      - traefik.enable=false
+
+networks:
+  dokploy-network:
+    external: true
+  proxy:
+    ipam:
+      config:
+        - subnet: ${PKP_PROXY_SUBNET:-172.30.92.0/29}
+  data:
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:

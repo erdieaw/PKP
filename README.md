@@ -81,6 +81,10 @@ docker compose --env-file backend/.env -f backend/compose.yml --profile app up -
 
 Compose mengganti alamat dependency internal app; env host tetap memakai published port loopback untuk CLI migrasi. `MINIO_PUBLIC_ENDPOINT` harus tetap dapat dijangkau browser. Image runtime tidak menjalankan migrasi/seed otomatis. Jangan gunakan `down -v` untuk deployment ulang karena menghapus volume. Compose ini deployment lokal, bukan deployment produksi yang sudah hardened.
 
+## Deployment Dokploy
+
+Konfigurasi FE/BE untuk `https://pkp.pkm-ujungpangkah.online` tersedia di [`compose.dokploy.yml`](compose.dokploy.yml), terpisah dari Compose lokal. Traefik mengarah ke frontend Nginx port **8080**; API tetap same-origin di `/api/v1`, backend tidak dipublikasikan langsung. Contoh environment, IP proxy, domain storage HTTPS, provisioning dan update tanpa reset data ada di [panduan Dokploy](deploy/README.md).
+
 ## API Dan Deployment
 
 [`.env.example`](.env.example) mendokumentasikan `VITE_API_BASE_URL=/api/v1`; ini default dan tidak perlu env frontend untuk quickstart. Nilai `VITE_*` masuk bundle saat build, bukan secret. URL absolut opsional, misalnya `https://api.example.invalid/api/v1`, memerlukan backend `FRONTEND_URL` yang cocok **exact origin** frontend serta CORS/storage yang sesuai. Restart Vite/rebuild setelah perubahan env frontend.
@@ -111,7 +115,7 @@ server {
 }
 ```
 
-`proxy_pass` tanpa trailing URI mempertahankan `/api/v1`; jangan mengarahkan error API ke `index.html`. Swagger tidak ikut diproxy contoh ini. Tambahkan TLS dan review trust-proxy/IP rate limit sebelum produksi; backend belum mengonfigurasi trust proxy. Signed upload/download menuju endpoint storage publik langsung, bukan otomatis lewat proxy API: sediakan TLS, endpoint browser dan CORS storage yang benar, tanpa mengganti host signed URL setelah diterbitkan. `FRONTEND_URL` env lokal baru adalah `http://localhost:5175`; ubah ke origin deployment saat berpindah lingkungan.
+`proxy_pass` tanpa trailing URI mempertahankan `/api/v1`; jangan mengarahkan error API ke `index.html`. Swagger tidak ikut diproxy contoh ini. Tambahkan TLS dan review trust-proxy/IP rate limit sebelum produksi; backend hanya mempercayai IP proxy eksplisit melalui `TRUSTED_PROXY_IPS` (default kosong). Signed upload/download menuju endpoint storage publik langsung, bukan otomatis lewat proxy API: sediakan TLS, endpoint browser dan CORS storage yang benar, tanpa mengganti host signed URL setelah diterbitkan. `FRONTEND_URL` env lokal baru adalah `http://localhost:5175`; ubah ke origin deployment saat berpindah lingkungan.
 
 ## Perilaku Integrasi
 

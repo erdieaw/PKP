@@ -1,10 +1,17 @@
-FROM node:22.20.0-bookworm-slim AS build
+FROM node:22.20.0-bookworm-slim AS dependencies
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY prisma ./prisma
 RUN npm run prisma:generate
+
+FROM dependencies AS ops
+COPY scripts/init-storage.mjs ./scripts/init-storage.mjs
+USER node
+CMD ["npm", "run", "db:deploy"]
+
+FROM dependencies AS build
 COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build
