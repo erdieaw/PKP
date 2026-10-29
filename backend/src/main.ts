@@ -11,6 +11,7 @@ import { ApiExceptionFilter, ApiResponseInterceptor } from './core/http';
 export async function createApp() {
   const config = getConfig();
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { bodyParser: false });
+  app.set('trust proxy', config.trustedProxyIps.length ? config.trustedProxyIps : false);
   app.setGlobalPrefix('api/v1');
   app.use(helmet());
   app.useBodyParser('json', { limit: '1mb' });

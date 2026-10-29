@@ -11,3 +11,5 @@
 !bg.png
 !src/
 !src/**
+!deploy/
+!deploy/nginx.dokploy.conf.template
