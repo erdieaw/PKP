@@ -577,14 +577,22 @@ class ApiStore {
     if (!this.canInputOwnPeriod()) throw new ApiError(409, 'Unggah bukti hanya tersedia untuk Puskesmas sendiri pada tahun aktif.');
     const scope = this.scope();
     const signal = this.controller.signal;
-    const signed = await api.request<Wire>('/storage/presigned-upload', { method: 'POST', body: { ...scope, month, filename: file.name, mimeType: file.type, fileSizeBytes: file.size }, signal });
-    const response = await fetch(signed.uploadUrl, { method: 'PUT', headers: signed.requiredHeaders, body: file, signal });
-    if (!response.ok) throw new ApiError(response.status, 'Unggah bukti gagal.');
-    const metadata = await api.request<Wire>(`/storage/uploads/${signed.uploadId}/finalize`, { method: 'POST', signal });
+    const upload = await api.request<{ uploadId: string; objectKey: string; expiresInSeconds: number }>('/storage/uploads', { method: 'POST', body: { ...scope, month, filename: file.name, mimeType: file.type, fileSizeBytes: file.size }, signal });
     if (epoch !== this.generation) throw new Error('Sesi berubah selama unggah bukti.');
-    return { ...metadata, uploadId: signed.uploadId as string, evidenceId: signed.uploadId as string };
+    const path = `/storage/uploads/${encodeURIComponent(upload.uploadId)}`;
+    await api.upload(`${path}/content`, file, { signal });
+    if (epoch !== this.generation) throw new Error('Sesi berubah selama unggah bukti.');
+    const metadata = await api.request<Wire>(`${path}/finalize`, { method: 'POST', signal });
+    if (epoch !== this.generation) throw new Error('Sesi berubah selama unggah bukti.');
+    return { ...metadata, uploadId: upload.uploadId, evidenceId: upload.uploadId };
   });
-  getEvidenceDownload = (uploadId: string) => this.read('/storage/presigned-download', { healthCenterId: this.scope().healthCenterId, uploadId });
+  getEvidenceDownload = (uploadId: string) => this.downloadFile(`/storage/download?${new URLSearchParams({ healthCenterId: this.scope().healthCenterId, uploadId })}`);
+  downloadFile = async (path: string) => {
+    const epoch = this.generation;
+    const file = await api.download(path, { signal: this.controller.signal });
+    if (epoch !== this.generation) throw new Error('Lingkup sesi telah berubah.');
+    return file;
+  };
   createExport = (format: 'xlsx' | 'excel' | 'pdf', quarter: Quarter) => api.request<Wire>(`/export/${format === 'pdf' ? 'pdf' : 'excel'}/sheet7`, { method: 'POST', body: { ...this.scope(), quarter }, signal: this.controller.signal });
   pollExport = (id: string) => this.read(`/export/jobs/${encodeURIComponent(id)}`, { healthCenterId: this.scope().healthCenterId });
   async fetchSupervision(quarter: Quarter = 'ANNUAL') {

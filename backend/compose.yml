@@ -31,11 +31,12 @@ services:
       retries: 20
     restart: unless-stopped
   minio:
+    # Development only. Existing local setups retain the runtime-key fallback.
     image: quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     command: server /data --console-address ':9001'
     environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?Set MINIO_ACCESS_KEY}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-${MINIO_ACCESS_KEY:?Set MINIO_ACCESS_KEY}}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY}}
     ports:
       - '127.0.0.1:${MINIO_PORT:-59000}:9000'
       - '127.0.0.1:${MINIO_CONSOLE_PORT:-59001}:9001'
@@ -54,6 +55,13 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:?Set POSTGRES_USER}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-sipkp}?schema=public
       REDIS_URL: redis://redis:6379
       MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?Set MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY}
+      EVIDENCE_BUCKET: ${EVIDENCE_BUCKET:-evidence}
+      REPORTS_BUCKET: ${REPORTS_BUCKET:-reports}
+      # Never pass optional dev root credentials through env_file to the app.
+      MINIO_ROOT_USER: ''
+      MINIO_ROOT_PASSWORD: ''
     ports:
       - '127.0.0.1:${PORT:-4000}:4000'
     depends_on:

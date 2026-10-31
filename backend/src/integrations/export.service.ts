@@ -110,9 +110,17 @@ export class ExportService implements OnModuleInit, OnModuleDestroy {
     const row = await this.db.exportJob.findFirst({ where: { id, healthCenterId } });
     if (!row) throw new NotFoundException('Export job not found');
     const download = row.status === 'COMPLETED' && row.objectKey?.startsWith(`reports/${healthCenterId}/${row.id}/`)
-      ? await this.storage.signDownload(this.storage.config.reportsBucket, row.objectKey, `sheet7-${row.year}-${row.quarter || 'ANNUAL'}.${row.format}`)
+      ? { downloadPath: `/export/jobs/${row.id}/content?healthCenterId=${encodeURIComponent(healthCenterId)}`,
+        filename: `sheet7-${row.year}-${row.quarter || 'ANNUAL'}.${row.format}` }
       : {};
     return { ...row, quarter: row.quarter === 0 ? 'ANNUAL' : row.quarter, ...download };
+  }
+
+  async download(actor: Actor, id: string, requested: string | undefined, response: import('express').Response) {
+    const row = await this.get(actor, id, requested);
+    if (!row.downloadPath || !row.objectKey || !['xlsx', 'pdf'].includes(row.format)) throw new NotFoundException('Report is not ready');
+    return this.storage.streamObject(this.storage.config.reportsBucket, row.objectKey, row.filename!,
+      row.format === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', response);
   }
 
   private async reconcileFailure(job: Job) {

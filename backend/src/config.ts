@@ -58,7 +58,6 @@ export function getConfig() {
       public: integer('RATE_LIMIT_PUBLIC_PER_MINUTE', 120, 10000),
     },
     minioEndpoint: url('MINIO_ENDPOINT', 'http://127.0.0.1:59000', ['http:', 'https:']),
-    minioPublicEndpoint: url('MINIO_PUBLIC_ENDPOINT', 'http://127.0.0.1:59000', ['http:', 'https:']),
     minioAccessKey: required('MINIO_ACCESS_KEY', 3),
     minioSecretKey: required('MINIO_SECRET_KEY', 8),
     evidenceBucket: env.EVIDENCE_BUCKET ?? 'evidence',

@@ -79,7 +79,7 @@ Untuk memperbarui hanya aplikasi ketika PostgreSQL, Redis dan MinIO sudah berjal
 docker compose --env-file backend/.env -f backend/compose.yml --profile app up -d --build --no-deps --wait app frontend
 ```
 
-Compose mengganti alamat dependency internal app; env host tetap memakai published port loopback untuk CLI migrasi. `MINIO_PUBLIC_ENDPOINT` harus tetap dapat dijangkau browser. Image runtime tidak menjalankan migrasi/seed otomatis. Jangan gunakan `down -v` untuk deployment ulang karena menghapus volume. Compose ini deployment lokal, bukan deployment produksi yang sudah hardened.
+Compose mengganti alamat dependency internal app; env host tetap memakai published port loopback untuk CLI migrasi. Browser mengunggah/mengunduh melalui backend terautentikasi, bukan endpoint MinIO; `MINIO_PUBLIC_ENDPOINT` tidak digunakan. Produksi memakai MinIO eksternal privat melalui Tailscale, lihat `deploy/README.md`. Image runtime tidak menjalankan migrasi/seed otomatis. Jangan gunakan `down -v` untuk deployment ulang karena menghapus volume. Compose ini deployment lokal, bukan deployment produksi yang sudah hardened.
 
 ## Deployment Dokploy
 

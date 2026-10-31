@@ -1,14 +1,16 @@
 import {
   BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleDestroy,
-  ServiceUnavailableException,
+  ServiceUnavailableException, UnsupportedMediaTypeException,
 } from '@nestjs/common';
 import {
   CopyObjectCommand, DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, HeadObjectCommand,
   PutObjectCommand, S3Client,
 } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Role, Upload } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
+import type { Request, Response } from 'express';
+import { Readable, Transform } from 'node:stream';
+import { finished, pipeline } from 'node:stream/promises';
 import { getConfig } from '../config';
 import { Actor } from '../core/auth.decorators';
 import { audit } from '../core/audit';
@@ -17,26 +19,24 @@ import { activePeriod, assertWritable, lockYear } from '../core/period';
 import { RedisService } from '../core/redis.service';
 import { requireRoles, tenantFor } from '../core/tenant';
 import { DownloadDto, UploadDto } from './integrations.dto';
-import { matchesMagic, UPLOAD_TTL_SECONDS, validateUpload } from './storage.validation';
+import { matchesMagic, MAX_UPLOAD_BYTES, UPLOAD_TTL_SECONDS, validateUpload } from './storage.validation';
 
 @Injectable()
 export class IntegrationService implements OnModuleDestroy {
   readonly config = getConfig();
   readonly internal: S3Client;
-  private readonly publicClient: S3Client;
 
   constructor(private readonly db: DbService, private readonly redis: RedisService) {
     const options = {
       region: 'us-east-1', forcePathStyle: true, maxAttempts: 1,
       credentials: { accessKeyId: this.config.minioAccessKey, secretAccessKey: this.config.minioSecretKey },
-      requestHandler: { connectionTimeout: 2000, socketTimeout: 5000 },
+      requestHandler: { connectionTimeout: 5000, socketTimeout: 120000 },
       requestChecksumCalculation: 'WHEN_REQUIRED' as const,
     };
     this.internal = new S3Client({ ...options, endpoint: this.config.minioEndpoint });
-    this.publicClient = new S3Client({ ...options, endpoint: this.config.minioPublicEndpoint });
   }
 
-  onModuleDestroy() { this.internal.destroy(); this.publicClient.destroy(); }
+  onModuleDestroy() { this.internal.destroy(); }
 
   private authorizeUpload(actor: Actor, upload: Upload, healthCenterId?: string) {
     const tenant = tenantFor(actor, healthCenterId);
@@ -45,16 +45,12 @@ export class IntegrationService implements OnModuleDestroy {
     }
   }
 
-  async presignedUpload(actor: Actor, body: UploadDto) {
+  async prepareUpload(actor: Actor, body: UploadDto) {
     requireRoles(actor, Role.ADMIN_PUSKESMAS, Role.PIC);
     const healthCenterId = tenantFor(actor, body.healthCenterId);
     const filename = validateUpload(body.filename, body.mimeType, body.fileSizeBytes);
     const uploadId = randomUUID();
     const objectKey = `staging/${healthCenterId}/${body.year}/${body.month}/${uploadId}/${filename}`;
-    const uploadUrl = await getSignedUrl(this.publicClient, new PutObjectCommand({
-      Bucket: this.config.evidenceBucket, Key: objectKey, ContentType: body.mimeType,
-      ContentLength: body.fileSizeBytes, Metadata: { 'upload-id': uploadId },
-    }), { expiresIn: UPLOAD_TTL_SECONDS, signableHeaders: new Set(['content-length', 'content-type']) });
     await this.db.$transaction(async tx => {
       await lockYear(tx, body.year);
       await assertWritable(tx, healthCenterId, body.year, body.month);
@@ -65,7 +61,92 @@ export class IntegrationService implements OnModuleDestroy {
       } });
       await audit(tx, actor, healthCenterId, 'UPLOAD_PENDING', { uploadId, objectKey, sizeBytes: body.fileSizeBytes });
     });
-    return { uploadId, objectKey, uploadUrl, expiresInSeconds: UPLOAD_TTL_SECONDS, requiredHeaders: { 'Content-Type': body.mimeType } };
+    return { uploadId, objectKey, expiresInSeconds: UPLOAD_TTL_SECONDS };
+  }
+
+  async uploadContent(actor: Actor, id: string, request: Request) {
+    requireRoles(actor, Role.ADMIN_PUSKESMAS, Role.PIC);
+    const upload = await this.db.upload.findUnique({ where: { id } });
+    if (!upload) throw new NotFoundException('Upload not found');
+    this.authorizeUpload(actor, upload);
+    if (upload.status !== 'PENDING' || upload.expiresAt <= new Date()) throw new ConflictException('Upload is not pending or has expired');
+    if (request.headers['content-type']?.split(';')[0]?.trim().toLowerCase() !== 'application/octet-stream' || request.headers['content-encoding']) {
+      throw new UnsupportedMediaTypeException('Use an unencoded application/octet-stream body');
+    }
+    if (!Number.isSafeInteger(upload.sizeBytes) || upload.sizeBytes < 1 || upload.sizeBytes > MAX_UPLOAD_BYTES ||
+        request.headers['content-length'] !== String(upload.sizeBytes)) {
+      throw new BadRequestException('Content-Length must match the prepared upload size');
+    }
+    await this.db.$transaction(async tx => {
+      await lockYear(tx, upload.year);
+      await assertWritable(tx, upload.healthCenterId, upload.year, upload.month);
+    });
+    // Conditional creation prevents concurrent/replayed PUTs from replacing staged evidence.
+    const key = upload.objectKey;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 120000);
+    const abort = () => controller.abort();
+    request.once('aborted', abort);
+    let bytes = 0;
+    let validationError: BadRequestException | undefined;
+    const body = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        bytes += chunk.length;
+        if (bytes > upload.sizeBytes || bytes > MAX_UPLOAD_BYTES) {
+          validationError = new BadRequestException('Uploaded body exceeds the prepared size');
+          callback(validationError);
+        } else callback(null, chunk);
+      },
+      flush(callback) {
+        if (bytes !== upload.sizeBytes) {
+          validationError = new BadRequestException('Uploaded body size does not match');
+          callback(validationError);
+        } else callback();
+      },
+    });
+    const onRequestError = () => body.destroy(new Error('Upload connection closed'));
+    request.once('error', onRequestError);
+    body.once('error', abort);
+    let committed = false;
+    let stored = false;
+    try {
+      const transfer = this.internal.send(new PutObjectCommand({
+        Bucket: this.config.evidenceBucket, Key: key, Body: body, ContentLength: upload.sizeBytes,
+        ContentType: upload.mimeType, Metadata: { 'upload-id': id }, IfNoneMatch: '*',
+      }), { abortSignal: controller.signal });
+      const consumed = finished(body, { cleanup: true });
+      request.pipe(body);
+      await Promise.all([transfer, consumed]);
+      stored = true;
+      await this.db.$transaction(async tx => {
+        await lockYear(tx, upload.year);
+        const current = await tx.upload.findUniqueOrThrow({ where: { id } });
+        if (current.status !== 'PENDING' || current.expiresAt <= new Date() || current.objectKey !== upload.objectKey) {
+          throw new ConflictException('Upload changed or expired; prepare a new upload');
+        }
+        await assertWritable(tx, upload.healthCenterId, upload.year, upload.month);
+        await audit(tx, actor, upload.healthCenterId, 'UPLOAD_CONTENT_RECEIVED', { uploadId: id, sizeBytes: bytes });
+      });
+      committed = true;
+      return { uploadId: id, status: 'PENDING' };
+    } catch (error) {
+      if (validationError) throw validationError;
+      if (error instanceof ConflictException) throw error;
+      if ((error as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode === 412 ||
+          (error as { name?: string })?.name === 'PreconditionFailed') {
+        throw new ConflictException('Upload content already received; finalize it or prepare a new upload');
+      }
+      throw new ServiceUnavailableException('Upload transfer unavailable; retry the upload');
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
+      request.unpipe(body);
+      request.removeListener('aborted', abort);
+      request.removeListener('error', onRequestError);
+      body.destroy();
+      // An ambiguous/failed PUT may belong to a winning concurrent request; never delete it.
+      if (stored && !committed) await this.deleteQuietly(this.config.evidenceBucket, key);
+    }
   }
 
   async finalize(actor: Actor, id: string) {
@@ -91,7 +172,7 @@ export class IntegrationService implements OnModuleDestroy {
         CopySource: `${bucket}/${upload.objectKey.split('/').map(encodeURIComponent).join('/')}`,
         CopySourceIfMatch: head.ETag,
       }), { abortSignal: AbortSignal.timeout(5000) });
-      // Validate the immutable copy, not a staging object that its presigned PUT can still replace.
+      // Validate an immutable copy; concurrent staging transfers cannot change this key.
       const finalHead = await this.internal.send(new HeadObjectCommand({ Bucket: bucket, Key: finalKey }), { abortSignal: AbortSignal.timeout(5000) });
       if (finalHead.ContentLength !== upload.sizeBytes || finalHead.ContentType !== upload.mimeType ||
           finalHead.Metadata?.['upload-id'] !== upload.id || !finalHead.ETag) {
@@ -107,6 +188,7 @@ export class IntegrationService implements OnModuleDestroy {
         await lockYear(tx, upload.year);
         const current = await tx.upload.findUniqueOrThrow({ where: { id } });
         if (current.status !== 'PENDING') return current;
+        if (current.objectKey !== upload.objectKey) throw new ConflictException('Upload changed; retry finalization');
         await assertWritable(tx, upload.healthCenterId, upload.year, upload.month);
         if (current.expiresAt <= new Date()) throw new ConflictException('Upload has expired');
         const ready = await tx.upload.update({ where: { id }, data: { status: 'READY', objectKey: finalKey, etag: finalHead.ETag } });
@@ -129,7 +211,7 @@ export class IntegrationService implements OnModuleDestroy {
     catch { /* Unreferenced private objects can be cleaned up by a storage lifecycle rule. */ }
   }
 
-  async presignedDownload(actor: Actor, query: DownloadDto) {
+  async download(actor: Actor, query: DownloadDto, response: Response) {
     if (Boolean(query.uploadId) === Boolean(query.objectKey)) throw new BadRequestException('Specify exactly one of uploadId or objectKey');
     const upload = await this.db.upload.findUnique({ where: query.uploadId ? { id: query.uploadId } : { objectKey: query.objectKey! } });
     if (!upload) throw new NotFoundException('Upload not found');
@@ -137,14 +219,48 @@ export class IntegrationService implements OnModuleDestroy {
     if (!['READY', 'ATTACHED'].includes(upload.status) || !upload.objectKey.startsWith(`evidence/${upload.healthCenterId}/`)) {
       throw new ConflictException('Upload is not ready');
     }
-    return { uploadId: upload.id, objectKey: upload.objectKey, ...await this.signDownload(this.config.evidenceBucket, upload.objectKey, upload.filename) };
+    return this.streamObject(this.config.evidenceBucket, upload.objectKey, upload.filename, upload.mimeType, response,
+      { etag: upload.etag ?? undefined, size: upload.sizeBytes });
   }
 
-  async signDownload(bucket: string, objectKey: string, filename: string) {
-    const downloadUrl = await getSignedUrl(this.publicClient, new GetObjectCommand({
-      Bucket: bucket, Key: objectKey, ResponseContentDisposition: `attachment; filename="${filename.replace(/[^a-zA-Z0-9._-]/g, '_')}"`,
-    }), { expiresIn: UPLOAD_TTL_SECONDS });
-    return { downloadUrl, expiresInSeconds: UPLOAD_TTL_SECONDS };
+  async streamObject(bucket: string, objectKey: string, filename: string, mimeType: string, response: Response,
+    expected?: { etag?: string; size: number }) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 120000);
+    const abort = () => controller.abort();
+    response.once('close', abort);
+    let body: Readable | undefined;
+    try {
+      const object = await this.internal.send(new GetObjectCommand({
+        Bucket: bucket, Key: objectKey, ...(expected?.etag ? { IfMatch: expected.etag } : {}),
+      }), { abortSignal: controller.signal });
+      if (object.Body instanceof Readable) body = object.Body;
+      if (!body || object.ContentLength === undefined || (expected && object.ContentLength !== expected.size)) {
+        throw new ServiceUnavailableException('Stored file is unavailable');
+      }
+      if (response.destroyed) return;
+      response.set({
+        'Content-Type': mimeType, 'Content-Length': String(object.ContentLength),
+        'Content-Disposition': `attachment; filename="${filename.replace(/[^a-zA-Z0-9._-]/g, '_')}"`,
+        'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff',
+      });
+      await pipeline(body, response, { signal: controller.signal });
+    } catch (error) {
+      if (response.headersSent || response.destroyed) {
+        if (!response.destroyed) response.destroy();
+        return;
+      }
+      response.removeHeader('Content-Length');
+      response.removeHeader('Content-Disposition');
+      response.removeHeader('Content-Type');
+      if ((error as { name?: string })?.name === 'NoSuchKey') throw new NotFoundException('File not found');
+      throw new ServiceUnavailableException('File download unavailable; retry later');
+    } finally {
+      clearTimeout(timer);
+      response.removeListener('close', abort);
+      controller.abort();
+      body?.destroy();
+    }
   }
 
   async ready() {

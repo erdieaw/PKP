@@ -279,14 +279,25 @@ test('DO saves, reads, authorizes, exports and preserves V1 snapshots through re
         let download: string | undefined;
         const deadline = Date.now() + 25_000;
         while (Date.now() < deadline) {
-          const job = await request<{ status: string; downloadUrl?: string }>('GET', `/export/jobs/${queued.jobId}`, a.accessToken);
+          const job = await request<{ status: string; downloadPath?: string; filename?: string }>('GET', `/export/jobs/${queued.jobId}`, a.accessToken);
           assert.notEqual(job.status, 'FAILED');
-          if (job.status === 'COMPLETED') { download = job.downloadUrl; break; }
+          if (job.status === 'COMPLETED') {
+            assert.equal(job.downloadPath, `/export/jobs/${queued.jobId}/content?healthCenterId=${center.id}`);
+            assert.equal(job.filename, `sheet7-2026-1.${format === 'excel' ? 'xlsx' : 'pdf'}`);
+            assert.ok(!('downloadUrl' in job));
+            download = job.downloadPath;
+            break;
+          }
           await delay(250);
         }
         assert.ok(download);
-        const response = await fetch(download, { signal: AbortSignal.timeout(10_000) });
+        const response = await fetch(`${base}${download}`, {
+          headers: { Authorization: `Bearer ${a.accessToken}` }, signal: AbortSignal.timeout(10_000),
+        });
         assert.equal(response.status, 200);
+        assert.equal(response.headers.get('cache-control'), 'private, no-store');
+        assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+        assert.equal(response.headers.get('content-type'), format === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         const buffer = await response.arrayBuffer();
         const bytes = Buffer.from(buffer);
         // Then

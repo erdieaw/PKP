@@ -15,7 +15,7 @@ if (!existsSync(path)) {
     `POSTGRES_PASSWORD=${password}`,
     `DATABASE_URL=postgresql://sipkp:${password}@127.0.0.1:55432/sipkp?schema=public`,
     'REDIS_URL=redis://127.0.0.1:56379', `JWT_SECRET=${secret()}`,
-    'MINIO_ENDPOINT=http://127.0.0.1:59000', 'MINIO_PUBLIC_ENDPOINT=http://127.0.0.1:59000',
+    'MINIO_ENDPOINT=http://127.0.0.1:59000',
     'MINIO_ACCESS_KEY=sipkp_local', `MINIO_SECRET_KEY=${secret()}`,
     'EVIDENCE_BUCKET=evidence', 'REPORTS_BUCKET=reports', 'SEED_DEMO=false', '',
   ].join('\n'), { flag: 'wx', mode: 0o600 });

@@ -15,7 +15,30 @@ server {
     resolver 127.0.0.11 valid=10s ipv6=off;
     set $backend http://app:4000;
 
+    # Only the UUID-addressed raw upload receives the larger request limit.
+    location ~ "^/api/v1/storage/uploads/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/content$" {
+        client_max_body_size 10m;
+        limit_except PUT { deny all; }
+        client_body_timeout 60s;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 120s;
+        proxy_read_timeout 120s;
+        proxy_pass $backend$request_uri;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;
+    }
+
     location /api/ {
+        # Stream authenticated evidence and export downloads through the backend.
+        proxy_buffering off;
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 120s;
+        proxy_read_timeout 120s;
         proxy_pass $backend$request_uri;
         proxy_http_version 1.1;
         proxy_set_header Host $host;

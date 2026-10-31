@@ -18,13 +18,15 @@ Quickstart di bawah dapat membuat `backend/.env` lokal otomatis dengan secrets a
 - `DATABASE_URL` untuk aplikasi **host** harus memakai `127.0.0.1` dan published port PostgreSQL (default55432), bukan hostname Docker `postgres`.
 - `REDIS_URL` host default `redis://127.0.0.1:56379`; cocokkan `REDIS_PORT` bila diubah.
 - `JWT_SECRET` minimal32 karakter; `ACCESS_TOKEN_SECONDS` default900, `REFRESH_TOKEN_DAYS` default7.
-- `MINIO_ACCESS_KEY` dan `MINIO_SECRET_KEY` wajib diisi sendiri; scaffold memakainya sebagai akun root MinIO, bukan contoh policy produksi.
-- `MINIO_ENDPOINT` host default `http://127.0.0.1:59000`; `MINIO_PUBLIC_ENDPOINT` harus alamat yang dapat diakses **client/browser**, dengan scheme/host/port final yang sama dengan signed URL.
-- `EVIDENCE_BUCKET=evidence`, `REPORTS_BUCKET=reports`: script lokal memastikan bucket **privat** melalui `init-storage.mjs`; alternatif manual melalui console/tooling operator. Console lokal default `http://127.0.0.1:59001`. Runtime aplikasi tidak auto-create bucket.
+- `MINIO_ACCESS_KEY` dan `MINIO_SECRET_KEY` adalah kredensial backend runtime, wajib diisi sendiri. Produksi wajib akun khusus least-privilege, bukan root. Compose development mendukung `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD` terpisah; provision akun runtime dan policy melalui tooling operator terlebih dahulu. Jika kedua root override kosong, Compose mempertahankan fallback akun runtime sebagai root agar setup lokal existing tidak rusak; **development saja**, bukan rekomendasi produksi. Jangan mengganti kredensial volume existing tanpa prosedur operator.
+- `MINIO_ENDPOINT` adalah satu-satunya endpoint S3 backend; host dev default `http://127.0.0.1:59000`. Browser hanya mengakses gateway `/api/v1`, tidak memerlukan endpoint publik atau CORS MinIO.
+- `EVIDENCE_BUCKET=evidence`, `REPORTS_BUCKET=reports` untuk dev, sesuai nama variabel runtime dan script existing. Pertahankan nilai bucket konfigurasi existing saat redeploy. Bucket boleh sama, misalnya `pkponline`, karena key memakai `staging/`, `evidence/`, dan `reports/`; mengganti nilai bucket bukan migrasi data otomatis. Runtime aplikasi tidak auto-create bucket. Console lokal `http://127.0.0.1:59001` hanya untuk operator dev.
 - `FRONTEND_URL` exact origin tanpa path/trailing slash: default config `http://localhost:3000`, env buatan local.mjs memakai `http://localhost:5175`; sesuaikan origin frontend aktual. `PORT` default4000; `NODE_ENV=development` untuk host dev.
 - `ENABLE_SWAGGER=true` opsional membuka `/api/docs`; jangan mengekspos dokumentasi tanpa review akses produksi.
 
-Scaffold binding port dependency ke loopback. Port MinIO publik dapat berbeda dari endpoint internal, tetapi URL bertanda tangan tidak boleh diganti hostname setelah diterbitkan. Untuk client remote, atur endpoint publik/reverse proxy dan bucket CORS/policy yang diperlukan secara eksplisit.
+Scaffold binding port dependency ke loopback; jangan publikasikan S3 atau console ke client remote. Untuk produksi gunakan [panduan private MinIO/SILO Dokploy](../deploy/README.md), termasuk tes konektivitas Tailscale **dari container**, ACL sempit tanpa aturan broad yang overlap, bind listener dan firewall host/Docker. Bucket privat tidak mengamankan socket. Tidak boleh ada public storage reverse proxy, Funnel, NAT/port-forward internet atau console publik.
+
+Kontrak gateway memakai lima variabel `MINIO_ENDPOINT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `EVIDENCE_BUCKET`, `REPORTS_BUCKET`; tidak memakai `MINIO_PUBLIC_ENDPOINT`. Nama variabel bucket tetap sama, tanpa rename atau alias baru. Backend/frontend harus dirilis bersama karena endpoint presigned lama sudah dihapus. Konfigurasi bucket existing tidak diubah otomatis.
 
 ## Install, Migrasi, Seed, Run
 
@@ -40,7 +42,7 @@ npm --prefix backend run build
 npm --prefix backend start
 ```
 
-[local.mjs](scripts/local.mjs) menentukan direktori backend dari lokasi script, sehingga pemanggilan dari root benar. Jika env belum ada, script membuat random password/JWT/storage secret dengan mode0600, tidak mencetak secret, tanpa default user atau akun demo; env existing **tidak ditimpa**. Script menjalankan Compose `up --wait` untuk dependency lalu [init-storage.mjs](scripts/init-storage.mjs) dari cwd backend untuk menyiapkan bucket. Env existing harus sudah valid; script tidak memperbaiki placeholder atau mengganti kredensial volume existing.
+[local.mjs](scripts/local.mjs) menentukan direktori backend dari lokasi script, sehingga pemanggilan dari root benar. Jika env belum ada, script membuat random password/JWT/storage secret dengan mode0600, tidak mencetak secret, tanpa default user atau akun demo; env existing **tidak ditimpa**. Script menjalankan Compose `up --wait` untuk dependency lalu [init-storage.mjs](scripts/init-storage.mjs) dari cwd backend untuk menyiapkan bucket. Env existing harus sudah valid; script tidak memperbaiki placeholder atau mengganti kredensial volume existing. Saat root/runtime dipisah, bucket dan akun disiapkan operator dengan kredensial provisioning, bukan dengan memperluas izin akun runtime.
 
 `npm --prefix backend run ...` menjalankan script dari direktori backend sehingga `dotenv/config` dan Prisma menemukan `backend/.env`; tidak sama dengan mengeksekusi `node backend/dist/src/main.js` langsung dari root. `--env-file backend/.env` pada Compose diperlukan untuk interpolasi dari root; `env_file: .env` service app saja tidak mengisi interpolasi Compose.
 
@@ -71,7 +73,7 @@ Dinkes bootstrap dapat masuk tanpa tenant dan membuat Puskesmas pertama melalui 
 
 Instal dependency root dengan `bun install --frozen-lockfile` (root memiliki `bun.lock`), atau `npm install` bila tidak memakai Bun. Alternatif npm membuat `package-lock.json` baru; `npm ci` root tidak dapat dipakai tanpa npm lockfile. Backend tetap memakai `npm --prefix backend ci`. Jalankan `npm run dev` di root: Vite membuka **http://localhost:5175** dengan strict port dan proxy `/api/v1` ke **http://localhost:4000**.
 
-Default frontend `VITE_API_BASE_URL=/api/v1` ada di [env example root](../.env.example). Deployment `dist/` perlu reverse proxy same-origin `/api/v1` ke backend dan SPA fallback untuk frontend; proxy Vite bukan bagian build produksi. URL API absolut opsional memerlukan CORS `FRONTEND_URL` exact origin frontend. Signed URL storage tetap harus dapat dijangkau browser; contoh deployment ada di README root.
+Default frontend `VITE_API_BASE_URL=/api/v1` ada di [env example root](../.env.example). Deployment `dist/` perlu reverse proxy same-origin `/api/v1` ke backend dan SPA fallback untuk frontend; proxy Vite bukan bagian build produksi. URL API absolut opsional memerlukan CORS `FRONTEND_URL` exact origin frontend. Transfer storage wajib melalui gateway backend; contoh produksi yang berlaku ada di [deploy/README.md](../deploy/README.md), bukan petunjuk signed URL lama.
 
 Refresh token disimpan hanya di `sessionStorage`, access token hanya di memori; reload memakai refresh lalu `/auth/me`. Tidak ada password plaintext atau skor operasional yang disimpan di browser storage pada jalur runtime. Opsi remember tidak menyediakan persistensi tambahan. Identity/role backend authoritative; store membersihkan scope dan membatalkan read lama saat user/tenant/tahun berubah, menolak respons stale, serta memblokir pergantian scope selama pending write.
 
@@ -101,7 +103,7 @@ docker compose --env-file backend/.env -f backend/compose.yml --profile app up -
 
 Profil `app` juga menjalankan frontend Nginx di `http://localhost:8080` (port dapat diubah melalui `FRONTEND_PORT`), dengan proxy same-origin ke API. Frontend dibangun memakai frozen `bun.lock`; backend tetap memakai `npm ci`. Untuk rebuild aplikasi tanpa me-restart dependency yang sudah sehat, lihat bagian deployment Docker di README root. Jangan jalankan seed ulang atau hapus volume untuk deployment existing.
 
-Compose override alamat internal aplikasi menjadi `postgres:5432`, `redis:6379`, `http://minio:9000`; pertahankan alamat loopback published port pada env host untuk CLI migrasi. `MINIO_PUBLIC_ENDPOINT` **tidak** dioverride: tetap harus alamat yang dapat dijangkau browser, bukan `http://minio:9000` untuk browser host.
+Compose lokal override alamat internal aplikasi menjadi `postgres:5432`, `redis:6379`, `http://minio:9000`; pertahankan alamat loopback published port pada env host untuk CLI migrasi. Tidak ada endpoint MinIO browser. Port 9000 ini hanya instance dev, **bukan** asumsi endpoint SILO produksi: bucket yang disetujui dilaporkan pada `pkm-u-pangka-01.tail1897af.ts.net:9100`, bucket `pkponline`; scheme dan konektivitas belum dibuktikan di sini. Dokploy mewajibkan endpoint privat eksternal, tanpa service MinIO lokal.
 
 URL PostgreSQL internal Compose menginterpolasi username/password **tanpa URL encoding**. Jika kredensial mengandung karakter reserved URL, override `app.environment.DATABASE_URL` dengan URL internal yang sudah di-encode melalui konfigurasi lokal operator; jangan mengubahnya menjadi password lemah untuk menghindari encoding.
 
@@ -117,9 +119,11 @@ URL PostgreSQL internal Compose menginterpolasi username/password **tanpa URL en
 - SQL trigger melindungi monthly record dari mutasi tahun/periode terkunci, annual target dari perubahan locked/protected, serta PIC assignment tenant sama. Target lock berulang hanya memproses row unlocked; `locked=0` bila sudah semuanya locked.
 - Default targetPct dihitung dari target fisik default/populasi default*100, round4 (nol jika populasi nol), bukan threshold polarity; `rawTargetNumeric` mempertahankan nilai katalog. Analytics prorata round4 sebelum scoring agar cocok record bulanan; tanpa exact monthly protected snapshot, analytics memakai snapshot quarter terlindungi terkecil yang mencakup bulan, bukan master live.
 - Target tidak dapat diedit lagi jika indikator itu sudah punya record tahun tersebut. Target nol menghasilkan score null dan tidak dapat memenuhi submit seluruh indikator; belum ada kebijakan not-applicable.
-- Signed PUT300 detik mengikat ContentLength/MIME. Finalize dirancang menyalin staging ke key evidence baru dan memeriksa ukuran, metadata, ETag, magic; bukan malware scanning atau WORM.
+- Gateway: `POST /api/v1/storage/uploads` membuat intent, `PUT /api/v1/storage/uploads/<UUID>/content` mengirim byte mentah terautentikasi, lalu `POST /api/v1/storage/uploads/<UUID>/finalize`. Metadata/izin/ukuran/MIME tetap divalidasi backend; finalize memeriksa staging dan menyalin ke key evidence baru, bukan malware scanning atau WORM. Nginx memberi batas 10m hanya pada raw PUT UUID, mematikan buffering request/response, dan mempertahankan batas JSON umum 1m.
 - Konflik finalization key/trigger telah diperbaiki dan dicakup e2e nyata: perubahan key/etag hanya diizinkan PENDING->READY; READY->ATTACHED diizinkan, key final tidak boleh diubah setelah finalize. Ini bukan malware scanner atau Object Lock.
-- Ekspor XLSX/PDF memakai antrean BullMQ dengan3 attempts dan data saat generate. COMPLETED hanya setelah object tersimpan; polling tenant-scoped memberikan signed download. Bridge sengaja unavailable503 menunggu kontrak resmi eksternal, tanpa URL/secret rekaan.
+- `GET /api/v1/storage/download` mengirim evidence biner terautentikasi. Ekspor XLSX/PDF memakai antrean BullMQ dengan3 attempts dan data saat generate; COMPLETED hanya setelah object tersimpan. Polling tenant-scoped diikuti `GET /api/v1/export/jobs/<id>/content` untuk respons biner, bukan signed URL. Nginx menonaktifkan response buffering API untuk streaming. Bridge sengaja unavailable503 menunggu kontrak resmi eksternal, tanpa URL/secret rekaan.
+
+Perpindahan bucket/endpoint adalah migrasi object tersendiri dengan persetujuan, inventaris DB `objectKey`, backup, verifikasi key/checksum/metadata dan rollback. Mengatur kedua bucket ke `pkponline` tidak menyalin object lama. Jangan mengubah key DB, re-seed, menghapus volume atau menghitung ulang histori PKP untuk menyesuaikan storage; lihat prosedur [migrasi terpisah](../deploy/README.md#migrasi-data-terpisah).
 
 ## Verifikasi
 
@@ -133,7 +137,7 @@ npm --prefix backend run build
 
 Untuk validasi skema, jalankan `npm exec -- prisma validate` **dengan working directory `backend/`**, agar Prisma menemukan `.env` backend seperti script lainnya.
 
-Unit tests mencakup `test/scoring.test.ts`, `test/storage.test.ts` serta test master/operations di `src/`. E2e nyata ada di `test/backend.e2e.ts`, `test/workflow.e2e.ts` dan `test/master-management.e2e.ts`, mencakup tenant/auth, CRUD/reset, workflow/cascade/history, SQL protection, storage signed PUT/finalize, analytics frozen inputs, dan export jobs. Gunakan PostgreSQL/Redis/MinIO **khusus disposable**, migrasi dan katalog seed yang sesuai; **jangan DB produksi**.
+Unit tests mencakup `test/scoring.test.ts`, `test/storage.test.ts` serta test master/operations di `src/`. E2e nyata ada di `test/backend.e2e.ts`, `test/workflow.e2e.ts` dan `test/master-management.e2e.ts`, mencakup tenant/auth, CRUD/reset, workflow/cascade/history, SQL protection, storage/finalize, analytics frozen inputs, dan export jobs. Pengujian signed URL historis bukan bukti gateway baru; pastikan suite telah diperbarui dan jalankan ulang sebelum cutover. Gunakan PostgreSQL/Redis/MinIO **khusus disposable**, migrasi dan katalog seed yang sesuai; **jangan DB produksi**.
 
 `npm --prefix backend run test` hanya memakai glob `test/*.test.ts`:8 focused master tests dan5 operations tests di `src/` **tidak termasuk**. Jalankan secara eksplisit dengan working directory **backend/**:
 
@@ -160,7 +164,7 @@ node tests/master-browser.e2e.mjs
 
 Runner [run-browser-e2e.mjs](../tests/run-browser-e2e.mjs) membuat password acak jika `FE_E2E_PASSWORD` tidak disediakan, seed fixtures, lalu menjalankan tiga suite tanpa mencetak kredensial. URL default `FE_E2E_URL=http://localhost:5175`, `FE_E2E_API_URL=http://localhost:4000/api/v1`. Fixtures/data/audit/object dipertahankan, bukan rollback otomatis; jangan gunakan produksi. Session suite membaca JWT secret backend test dari environment/`backend/.env` dan bergantung pada modul source Vite development.
 
-- [frontend.e2e.mjs](../tests/frontend.e2e.mjs): login, target/input bulanan persisten, evidence signed PUT/finalize/download, session restore, izin PIC dan isolasi tenant.
+- [frontend.e2e.mjs](../tests/frontend.e2e.mjs): login, target/input bulanan persisten, evidence upload/finalize/download, session restore, izin PIC dan isolasi tenant; verifikasi gateway, bukan hasil signed URL historis.
 - [workflow-browser.e2e.mjs](../tests/workflow-browser.e2e.mjs): submit/verify/reopen UI, lock tersimpan, worker XLSX/PDF dan navigasi/overflow mobile.
 - [session-browser.e2e.mjs](../tests/session-browser.e2e.mjs): JWT expired sungguhan dengan signature valid (bukan mock HTTP), refresh/retry, pending-write scope guard, logout, password-change revocation dan stale-refresh isolation.
 - [master-browser.e2e.mjs](../tests/master-browser.e2e.mjs): **terpisah, belum masuk runner gabungan**. Run final lulus CRUD global Admin/Dinkes, visibilitas lintas Puskesmas, reset PIC, revoke session lama, password lama401/login baru200, cleanup arsip, dan console bersih.

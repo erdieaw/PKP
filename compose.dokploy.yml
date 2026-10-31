@@ -19,12 +19,11 @@ x-backend-environment: &backend-environment
   RATE_LIMIT_WRITE_PER_MINUTE: ${RATE_LIMIT_WRITE_PER_MINUTE:-120}
   RATE_LIMIT_PUBLIC_PER_MINUTE: ${RATE_LIMIT_PUBLIC_PER_MINUTE:-120}
   TRUSTED_PROXY_IPS: ${PKP_FRONTEND_PROXY_IP:-172.30.92.2}
-  MINIO_ENDPOINT: http://minio:9000
-  MINIO_PUBLIC_ENDPOINT: https://${PKP_STORAGE_DOMAIN:-pkp-storage.pkm-ujungpangkah.online}
+  MINIO_ENDPOINT: ${MINIO_ENDPOINT:?Set the external private MinIO S3 endpoint}
   MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?Set MINIO_ACCESS_KEY}
   MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY}
-  EVIDENCE_BUCKET: ${EVIDENCE_BUCKET:-evidence}
-  REPORTS_BUCKET: ${REPORTS_BUCKET:-reports}
+  EVIDENCE_BUCKET: ${EVIDENCE_BUCKET:?Set the existing private evidence bucket}
+  REPORTS_BUCKET: ${REPORTS_BUCKET:?Set the existing private reports bucket}
 
 services:
   frontend:
@@ -80,8 +79,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      minio:
-        condition: service_started
     healthcheck:
       test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:4000/api/v1/health/ready',{signal:AbortSignal.timeout(4000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -130,33 +127,6 @@ services:
     labels:
       - traefik.enable=false
 
-  minio:
-    image: quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
-    command: server /data --console-address ':9001'
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?Set MINIO_ACCESS_KEY}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY}
-      MINIO_API_CORS_ALLOW_ORIGIN: https://${PKP_DOMAIN:-pkp.pkm-ujungpangkah.online}
-    volumes:
-      - minio_data:/data
-    networks:
-      - data
-      - dokploy-network
-    restart: unless-stopped
-    labels:
-      - traefik.enable=true
-      - traefik.docker.network=dokploy-network
-      - traefik.http.routers.sipkp-storage.rule=Host(`${PKP_STORAGE_DOMAIN:-pkp-storage.pkm-ujungpangkah.online}`)
-      - traefik.http.routers.sipkp-storage.entrypoints=web
-      - traefik.http.routers.sipkp-storage.service=sipkp-storage
-      - traefik.http.routers.sipkp-storage.middlewares=sipkp-https
-      - traefik.http.routers.sipkp-storage-secure.rule=Host(`${PKP_STORAGE_DOMAIN:-pkp-storage.pkm-ujungpangkah.online}`)
-      - traefik.http.routers.sipkp-storage-secure.entrypoints=websecure
-      - traefik.http.routers.sipkp-storage-secure.tls=true
-      - traefik.http.routers.sipkp-storage-secure.tls.certresolver=letsencrypt
-      - traefik.http.routers.sipkp-storage-secure.service=sipkp-storage
-      - traefik.http.services.sipkp-storage.loadbalancer.server.port=9000
-
   # Explicit operator jobs only; never started by the normal deployment.
   ops:
     profiles: ['tools']
@@ -186,4 +156,5 @@ networks:
 volumes:
   postgres_data:
   redis_data:
+  # Retain the legacy volume declaration for a separately approved data migration.
   minio_data:
