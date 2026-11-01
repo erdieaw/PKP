@@ -1,10 +1,12 @@
-import { IsEnum, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsEnum, IsOptional, IsString, Matches, MaxLength, MinLength, ValidateIf } from 'class-validator';
 import { Role } from '@prisma/client';
 
 export class LoginDto {
   @IsString() @MinLength(1) @MaxLength(100) username!: string;
   @IsString() @MinLength(1) @MaxLength(1024) password!: string;
   @IsOptional() @IsEnum(Role) role?: Role;
+  @ValidateIf((_object, value) => value !== undefined) @IsString() @MinLength(1) @MaxLength(2048) @Matches(/\S/)
+  turnstileToken?: string;
 }
 
 export class RefreshDto {

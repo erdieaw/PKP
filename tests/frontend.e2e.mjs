@@ -143,12 +143,17 @@ try {
   const record = records.find(item => item.indicatorId === indicator.id);
   assert.ok(record.evidenceId, 'Server must persist the attached evidence ID.');
   assert.equal(record.notes, 'FE E2E browser evidence');
-  await drawer.getByRole('button', { name: 'Siapkan unduhan bukti', exact: true }).click();
-  const link = drawer.getByRole('link', { name: 'Unduh bukti dukung', exact: true });
-  await link.waitFor();
-  const evidence = await admin.request.get(await link.getAttribute('href'));
-  assert.ok(evidence.ok(), 'Presigned evidence download failed.');
-  assert.equal((await evidence.body()).length, 68);
+  const evidenceResponse = admin.waitForResponse(response => new URL(response.url()).pathname.endsWith('/storage/download'));
+  const evidenceDownloading = admin.waitForEvent('download');
+  await drawer.getByRole('button', { name: 'Unduh bukti dukung', exact: true }).click();
+  const evidence = await evidenceResponse;
+  assert.ok(evidence.ok(), 'Authenticated evidence download failed.');
+  assert.ok((await evidence.request().headerValue('authorization'))?.startsWith('Bearer '));
+  const evidenceDownload = await evidenceDownloading;
+  assert.equal(await evidenceDownload.failure(), null);
+  const evidenceChunks = [];
+  for await (const chunk of await evidenceDownload.createReadStream()) evidenceChunks.push(chunk);
+  assert.equal(Buffer.concat(evidenceChunks).length, 68);
 
   stage = 'admin session restore';
   await admin.reload();

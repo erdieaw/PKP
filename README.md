@@ -79,11 +79,11 @@ Untuk memperbarui hanya aplikasi ketika PostgreSQL, Redis dan MinIO sudah berjal
 docker compose --env-file backend/.env -f backend/compose.yml --profile app up -d --build --no-deps --wait app frontend
 ```
 
-Compose mengganti alamat dependency internal app; env host tetap memakai published port loopback untuk CLI migrasi. `MINIO_PUBLIC_ENDPOINT` harus tetap dapat dijangkau browser. Image runtime tidak menjalankan migrasi/seed otomatis. Jangan gunakan `down -v` untuk deployment ulang karena menghapus volume. Compose ini deployment lokal, bukan deployment produksi yang sudah hardened.
+Compose mengganti alamat dependency internal app; env host tetap memakai published port loopback untuk CLI migrasi. Browser mengunggah/mengunduh melalui backend terautentikasi, bukan endpoint MinIO; `MINIO_PUBLIC_ENDPOINT` tidak digunakan. Produksi memakai MinIO eksternal privat melalui Tailscale, lihat `deploy/README.md`. Image runtime tidak menjalankan migrasi/seed otomatis. Jangan gunakan `down -v` untuk deployment ulang karena menghapus volume. Compose ini deployment lokal, bukan deployment produksi yang sudah hardened.
 
 ## Deployment Dokploy
 
-Konfigurasi FE/BE untuk `https://pkp.pkm-ujungpangkah.online` tersedia di [`compose.dokploy.yml`](compose.dokploy.yml), terpisah dari Compose lokal. Traefik mengarah ke frontend Nginx port **8080**; API tetap same-origin di `/api/v1`, backend tidak dipublikasikan langsung. Contoh environment, IP proxy, domain storage HTTPS, provisioning dan update tanpa reset data ada di [panduan Dokploy](deploy/README.md).
+Konfigurasi FE/BE untuk `https://pkp.pkm-ujungpangkah.online` tersedia di [`compose.dokploy.yml`](compose.dokploy.yml), terpisah dari Compose lokal. Traefik mengarah ke frontend Nginx port **8080**; API tetap same-origin di `/api/v1`, backend tidak dipublikasikan langsung. Urutan setup UI, [generator secret instalasi baru](deploy/generate-env.mjs), key Turnstile/SILO, IP proxy, storage privat, provisioning dan update tanpa reset data ada di [panduan Dokploy](deploy/README.md). Generator menulis file privat `deploy/dokploy.env` tanpa mencetak secret atau menimpa file existing; bukan alat rotasi key/konfigurasi DB existing.
 
 ## API Dan Deployment
 

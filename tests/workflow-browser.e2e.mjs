@@ -160,7 +160,7 @@ try {
   activePage = dinkes.page;
   for (const [format, button, extension, signature] of [
     ['excel', 'Unduh Excel (Sheet 7)', 'xlsx', 'PK'],
-    ['pdf', 'Unduh PDF Resmi', 'pdf', '%PDF-'],
+    ['pdf', /^Unduh PDF /, 'pdf', '%PDF-'],
   ]) {
     await dinkes.page.getByRole('button', { name: 'Ekspor laporan', exact: true }).click();
     const modal = dinkes.page.getByRole('dialog', { name: 'Ekspor laporan PKP', exact: true });
@@ -176,10 +176,17 @@ try {
     const jobId = data(await queuedResponse.json()).jobId;
     const completedResponse = await completed;
     assert.ok(new URL(completedResponse.url()).pathname.endsWith(`/${jobId}`));
-    const link = modal.getByRole('link', { name: /^Unduh sheet7-/ });
-    await link.waitFor();
+    const job = data(await completedResponse.json());
+    assert.ok(job.downloadPath.startsWith('/export/jobs/'));
+    assert.equal(job.downloadUrl, undefined);
+    const downloadButton = modal.getByRole('button', { name: `Unduh ${job.filename}`, exact: true });
+    await downloadButton.waitFor();
     const downloading = dinkes.page.waitForEvent('download');
-    await link.click();
+    const content = dinkes.page.waitForResponse(response => new URL(response.url()).pathname.endsWith(`/export/jobs/${jobId}/content`));
+    await downloadButton.click();
+    const contentResponse = await content;
+    assert.ok(contentResponse.ok());
+    assert.ok((await contentResponse.request().headerValue('authorization'))?.startsWith('Bearer '));
     const download = await downloading;
     assert.equal(await download.failure(), null);
     const chunks = [];

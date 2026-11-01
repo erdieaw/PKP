@@ -18,6 +18,16 @@ export interface SessionTokens {
   refreshToken: string;
 }
 
+export interface DownloadedFile {
+  blob: Blob;
+  filename?: string;
+}
+
+interface TransferOptions extends RequestOptions {
+  rawBody?: Blob;
+  binary?: boolean;
+}
+
 const base = (import.meta.env.VITE_API_BASE_URL || '/api/v1').replace(/\/$/, '');
 const sessionKey = 'SIPKP_SESSION';
 let accessToken: string | null = null;
@@ -38,17 +48,39 @@ function expire() {
   window.dispatchEvent(new CustomEvent('sipkp-session-expired'));
 }
 
-async function send<T>(path: string, options: RequestOptions, token: string | null): Promise<T> {
+function apiPath(path: string) {
+  if (!/^\/?[a-zA-Z0-9_-]/.test(path) || /[\\\s#]/.test(path)) throw new ApiError(0, 'Path API tidak valid.');
+  try {
+    for (const segment of path.split('?')[0].split('/')) {
+      const decoded = decodeURIComponent(segment);
+      if (decoded === '.' || decoded === '..' || /[\\/\s:#]/.test(decoded)) throw new Error();
+    }
+  } catch { throw new ApiError(0, 'Path API tidak valid.'); }
+  return `${base}/${path.replace(/^\//, '')}`;
+}
+
+async function send<T>(path: string, options: TransferOptions, token: string | null): Promise<T> {
+  const url = apiPath(path);
   let response: Response;
   try {
-    response = await fetch(`${base}/${path.replace(/^\//, '')}`, {
-      method: options.method ?? 'GET', signal: options.signal,
-      headers: { Accept: 'application/json', ...(options.body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
+    response = await fetch(url, {
+      method: options.method ?? 'GET', signal: options.signal, redirect: 'error',
+      headers: { Accept: options.binary ? 'application/octet-stream' : 'application/json', ...(options.rawBody !== undefined ? { 'Content-Type': 'application/octet-stream' } : options.body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      ...(options.rawBody !== undefined ? { body: options.rawBody } : options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
     });
   } catch (error) {
     if (options.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
     throw new ApiError(0, 'Tidak dapat menghubungi server.', error);
+  }
+  if (response.ok && options.rawBody !== undefined && !response.headers.get('Content-Type')?.includes('json')) return undefined as T;
+  if (response.ok && options.binary) {
+    const disposition = response.headers.get('Content-Disposition') ?? '';
+    const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
+    let filename = /filename="([^"]*)"|filename=([^;\s]+)/i.exec(disposition)?.slice(1).find(Boolean);
+    if (encoded) {
+      try { filename = decodeURIComponent(encoded); } catch { /* Use the plain filename when encoding is invalid. */ }
+    }
+    return { blob: await response.blob(), filename } as T;
   }
   const text = await response.text();
   let payload: unknown;
@@ -90,18 +122,26 @@ function refresh(): Promise<void> {
   return work;
 }
 
-async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+async function authenticatedRequest<T>(path: string, options: TransferOptions = {}): Promise<T> {
   const auth = /^\/?auth\/(login|refresh)(?:[?/#]|$)/.test(path);
   const epoch = generation;
   const attemptedToken = accessToken;
-  try { return await send<T>(path, options, attemptedToken); }
+  try {
+    const result = await send<T>(path, options, attemptedToken);
+    if (epoch !== generation) throw new ApiError(401, 'Sesi telah berubah.');
+    return result;
+  }
   catch (error) {
     if (auth || !(error instanceof ApiError) || error.status !== 401) throw error;
     if (epoch !== generation) throw new ApiError(401, 'Sesi telah berubah.');
     if (attemptedToken === accessToken) await refresh();
     if (epoch !== generation) throw new ApiError(401, 'Sesi telah berubah.');
     options.signal?.throwIfAborted();
-    try { return await send<T>(path, options, accessToken); }
+    try {
+      const result = await send<T>(path, options, accessToken);
+      if (epoch !== generation) throw new ApiError(401, 'Sesi telah berubah.');
+      return result;
+    }
     catch (retryError) {
       if (epoch === generation && retryError instanceof ApiError && retryError.status === 401) expire();
       throw retryError;
@@ -109,13 +149,35 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
 }
 
+function request<T>(path: string, options: RequestOptions = {}) {
+  return authenticatedRequest<T>(path, options);
+}
+
+function saveDownload(file: DownloadedFile, fallback = 'download') {
+  const url = URL.createObjectURL(file.blob);
+  const link = document.createElement('a');
+  try {
+    link.href = url;
+    link.download = (file.filename || fallback).replace(/[\\/\u0000-\u001f\u007f]/g, '_');
+    document.body.appendChild(link);
+    link.click();
+  } finally {
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+}
+
 export const api = {
   request, setSession, clearSession, refresh,
+  upload: (path: string, body: Blob, options: Pick<RequestOptions, 'signal'> = {}) => authenticatedRequest<void>(path, { ...options, method: 'PUT', rawBody: body }),
+  download: (path: string, options: Pick<RequestOptions, 'signal'> = {}) => authenticatedRequest<DownloadedFile>(path, { ...options, binary: true }),
+  saveDownload,
+  loginConfig: (signal: AbortSignal) => send<{ turnstileEnabled: boolean; turnstileSiteKey: string | null }>('/auth/login-config', { signal }, null),
   hasSession: () => Boolean(refreshToken()),
-  async login<T extends SessionTokens>(username: string, password: string, role?: string): Promise<T> {
+  async login<T extends SessionTokens>(username: string, password: string, role?: string, turnstileToken?: string): Promise<T> {
     clearSession();
     const epoch = generation;
-    const result = await request<T>('/auth/login', { method: 'POST', body: { username, password, role } });
+    const result = await request<T>('/auth/login', { method: 'POST', body: { username, password, role, turnstileToken } });
     if (epoch !== generation) throw new ApiError(401, 'Sesi telah berubah.');
     setSession(result);
     return result;

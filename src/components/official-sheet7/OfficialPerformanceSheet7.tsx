@@ -117,8 +117,8 @@ export const OfficialPerformanceSheet7: React.FC = () => {
       {error && <p role="alert" className="p-4 bg-rose-50 text-rose-800 rounded-xl">{error}</p>}
       {pending && <ProcessingIndicator label="Menyimpan perubahan periode ke server..." description="Tunggu hingga penyimpanan selesai sebelum melanjutkan perubahan periode." />}
       {reportExport.error && <p role="alert" className="p-4 bg-rose-50 text-rose-800 rounded-xl">{reportExport.error}</p>}
-      {reportExport.pending && <ProcessingIndicator label="Server sedang memproses PDF laporan..." description="Tautan unduhan akan tersedia setelah laporan selesai diproses." />}
-      {reportExport.file && <a href={reportExport.file.url} download={reportExport.file.name} target="_blank" rel="noreferrer" className="block p-4 bg-emerald-50 text-emerald-800 rounded-xl underline">Unduh {reportExport.file.name}</a>}
+      {reportExport.pending && <ProcessingIndicator label={reportExport.file ? 'Mengunduh laporan dari server...' : 'Server sedang memproses PDF laporan...'} description="Berkas diunduh setelah tombol unduh diklik." />}
+      {reportExport.file && <button disabled={reportExport.pending} onClick={() => void reportExport.download()} className="block p-4 bg-emerald-50 text-emerald-800 rounded-xl underline disabled:opacity-50">Unduh {reportExport.file.name}</button>}
       {/* ===================== NOTIFICATION TOAST ===================== */}
       {notification && (
         <div className="no-print p-4 bg-emerald-50 border border-emerald-300 rounded-xl flex items-center justify-between text-emerald-900 text-sm font-semibold shadow-sm animate-in fade-in">

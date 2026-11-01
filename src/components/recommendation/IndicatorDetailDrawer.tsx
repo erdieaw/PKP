@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useSyncExternalStore } from 'react';
 import { OfficialIndicator } from '../../types/pkp';
 import { pkpStore } from '../../services/apiStore';
+import { api } from '../../services/apiClient';
 import { 
   X, 
   Target, 
@@ -43,7 +44,6 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedSuccess, setSavedSuccess] = useState(false);
-  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const generation = useRef(0);
   const year = pkpStore.getCurrentYear();
   const center = pkpStore.getSelectedHealthCenterId();
@@ -52,7 +52,7 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
     const record = indicator ? pkpStore.getMonthlyRecord(indicator.id, selectedMonth) : null;
     setRealisasiInput(record?.pencapaianRiil?.toString() ?? '');
     setNotesInput(record?.notes ?? ''); setEvidenceId(record?.evidenceId ?? null);
-    setEvidenceName(''); setError(null); setSavedSuccess(false); setPending(false); setDownloadUrl(null);
+    setEvidenceName(''); setError(null); setSavedSuccess(false); setPending(false);
     return () => { generation.current++; };
   }, [indicator?.id, selectedMonth, year, center]);
   if (!indicator) return null;
@@ -94,7 +94,7 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
     setPending(true); setError(null); setSavedSuccess(false);
     try {
       const metadata = await pkpStore.uploadEvidence(file, selectedMonth);
-      if (epoch === generation.current) { setEvidenceId(metadata.evidenceId); setEvidenceName(file.name); setDownloadUrl(null); }
+      if (epoch === generation.current) { setEvidenceId(metadata.evidenceId); setEvidenceName(file.name); }
     } catch (e) { if (epoch === generation.current) setError(e instanceof Error ? e.message : 'Unggah gagal.'); }
     finally { if (epoch === generation.current) setPending(false); }
   };
@@ -104,7 +104,7 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
     setPending(true); setError(null);
     try {
       const result = await pkpStore.getEvidenceDownload(evidenceId);
-      if (epoch === generation.current) setDownloadUrl(result.downloadUrl);
+      if (epoch === generation.current) api.saveDownload(result, evidenceName || `bukti-${evidenceId}`);
     } catch (e) { if (epoch === generation.current) setError(e instanceof Error ? e.message : 'Unduhan gagal.'); }
     finally { if (epoch === generation.current) setPending(false); }
   };
@@ -408,7 +408,7 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
                   />
                 </div>
 
-                {/* Evidence attachment simulation */}
+                {/* Evidence attachment */}
                 <div className="flex items-center justify-between pt-1">
                   <label className="min-w-0 text-slate-600">Lampirkan bukti dukung
                     <input type="file" aria-label="Lampirkan bukti dukung" disabled={!canEdit || pending}
@@ -426,8 +426,7 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
                 {requiresDoEditor ? <p role="status">Data DO 2026 memerlukan N/D aktual dan basis periode. Tutup rincian ini, lalu pilih sel realisasi pada halaman Input untuk mengedit tanpa mengubah basis data secara diam-diam.</p>
                   : !canEdit && <p>Hanya Admin atau PIC yang ditugaskan dapat mengubah periode terbuka.</p>}
                 {evidenceId && <div className="space-y-2"><p>Bukti: {evidenceName || evidenceId}. Simpan capaian untuk menautkan bukti dan catatan.</p>
-                  <button disabled={pending} onClick={handleDownload} className="underline">Siapkan unduhan bukti</button>
-                  {downloadUrl && <a href={downloadUrl} target="_blank" rel="noreferrer" className="block underline">Unduh bukti dukung</a>}
+                  <button disabled={pending} onClick={handleDownload} className="underline">Unduh bukti dukung</button>
                 </div>}
 
                 {savedSuccess && (

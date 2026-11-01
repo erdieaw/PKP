@@ -26,6 +26,19 @@ export function getConfig() {
   if (!databaseUrl) throw new Error('DATABASE_URL is required');
   const frontendUrl = url('FRONTEND_URL', 'http://localhost:3000', ['http:', 'https:']);
   if (new URL(frontendUrl).origin !== frontendUrl) throw new Error('FRONTEND_URL must be an exact origin without a path or trailing slash');
+  const siteKey = env.TURNSTILE_SITE_KEY?.trim() ?? '';
+  const secretKey = env.TURNSTILE_SECRET_KEY?.trim() ?? '';
+  const turnstileRequiredValue = env.TURNSTILE_REQUIRED;
+  if (turnstileRequiredValue !== undefined && !['true', 'false'].includes(turnstileRequiredValue)) {
+    throw new Error('TURNSTILE_REQUIRED must be true or false');
+  }
+  const turnstileRequired = turnstileRequiredValue === undefined ? nodeEnv === 'production' : turnstileRequiredValue === 'true';
+  if (Boolean(siteKey) !== Boolean(secretKey) || (turnstileRequired && !siteKey)) {
+    throw new Error('TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY must both be configured');
+  }
+  if (nodeEnv === 'production' && (/^[123]x0{20}[A-Z]{2}$/i.test(siteKey) || /^[123]x0{31}AA$/i.test(secretKey))) {
+    throw new Error('Turnstile testing keys are not allowed in production');
+  }
   const trustedProxyIps = env.TRUSTED_PROXY_IPS?.trim()
     ? env.TRUSTED_PROXY_IPS.split(',').map(value => value.trim()) : [];
   if (trustedProxyIps.length > 16 || trustedProxyIps.some(value => !isIP(value))) {
@@ -45,12 +58,12 @@ export function getConfig() {
       public: integer('RATE_LIMIT_PUBLIC_PER_MINUTE', 120, 10000),
     },
     minioEndpoint: url('MINIO_ENDPOINT', 'http://127.0.0.1:59000', ['http:', 'https:']),
-    minioPublicEndpoint: url('MINIO_PUBLIC_ENDPOINT', 'http://127.0.0.1:59000', ['http:', 'https:']),
     minioAccessKey: required('MINIO_ACCESS_KEY', 3),
     minioSecretKey: required('MINIO_SECRET_KEY', 8),
     evidenceBucket: env.EVIDENCE_BUCKET ?? 'evidence',
     reportsBucket: env.REPORTS_BUCKET ?? 'reports',
     frontendUrl,
+    turnstile: { required: turnstileRequired, siteKey, secretKey, hostname: new URL(frontendUrl).hostname },
     trustedProxyIps,
     nodeEnv,
   };

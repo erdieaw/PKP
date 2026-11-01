@@ -16,7 +16,7 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({ isOpen, on
   useSyncExternalStore(pkpStore.subscribe, pkpStore.getSnapshot, pkpStore.getServerSnapshot);
   const year = pkpStore.getCurrentYear();
   const scope = `${pkpStore.getSelectedHealthCenterId()}:${year}:${reportPeriod}`;
-  const { create, pending, error, file } = useReportExport(scope, isOpen);
+  const { create, download, pending, error, file } = useReportExport(scope, isOpen);
   if (!isOpen) return null;
   let summary;
   try { summary = pkpStore.getOfficialSheet7Data(reportPeriod); } catch { /* Scope is loading. */ }
@@ -54,8 +54,8 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({ isOpen, on
             </table>
           </div> : <p role="status">Ringkasan server belum tersedia.</p>}
           {error && <p role="alert" className="p-3 rounded-lg bg-rose-50 text-rose-800">{error}</p>}
-          {pending && <ProcessingIndicator label="Server sedang memproses ekspor." description="Menutup dialog menghentikan pemantauan pekerjaan ini." />}
-          {file && <a href={file.url} download={file.name} target="_blank" rel="noreferrer" className="block p-3 bg-emerald-50 text-emerald-800 rounded-lg underline">Unduh {file.name}</a>}
+          {pending && <ProcessingIndicator label={file ? 'Mengunduh laporan dari server.' : 'Server sedang memproses ekspor.'} description="Menutup dialog menghentikan pemantauan pekerjaan ini." />}
+          {file && <button disabled={pending} onClick={() => void download()} className="block p-3 bg-emerald-50 text-emerald-800 rounded-lg underline disabled:opacity-50">Unduh {file.name}</button>}
           {!canExport && <p>Unduhan laporan hanya tersedia bagi Admin Puskesmas dan Dinkes.</p>}
           <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
             <button disabled={pending || !canExport || !summary} onClick={() => void create('pdf', reportPeriod)} className="px-3.5 py-2 bg-slate-100 text-slate-700 rounded-lg font-semibold flex items-center gap-1.5 disabled:opacity-50"><Printer className="w-4 h-4" />{summary?.reportingPolicy?.operatingMode === 'INTERNAL_PHASED' ? 'Unduh PDF Evaluasi Internal' : summary?.isOfficial ? 'Unduh PDF Terverifikasi (Histori)' : 'Unduh PDF Provisional'}</button>

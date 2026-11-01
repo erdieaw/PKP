@@ -1,9 +1,10 @@
 import 'reflect-metadata';
 import assert from 'node:assert/strict';
 import { randomInt, randomUUID } from 'node:crypto';
+import { request as httpRequest } from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
 import { test } from 'node:test';
-import { HeadObjectCommand } from '@aws-sdk/client-s3';
+import { GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { Prisma, Role } from '@prisma/client';
 import { argon2id, hash } from 'argon2';
 import { AuthService } from '../src/auth/auth.service';
@@ -13,7 +14,7 @@ import { MAX_UPLOAD_BYTES } from '../src/integrations/storage.validation';
 import { createApp } from '../src/main';
 
 type Tokens = Awaited<ReturnType<AuthService['login']>>;
-type UploadUrl = Awaited<ReturnType<IntegrationService['presignedUpload']>>;
+type PreparedUpload = Awaited<ReturnType<IntegrationService['prepareUpload']>>;
 type Snapshot = {
   period: { coveredMonths: number[] };
   indicators: { id: string }[];
@@ -35,6 +36,16 @@ test('real backend integration: tenant isolation, workflow, storage, exports and
     const db = app.get(DbService);
     const auth = app.get(AuthService);
     const storage = app.get(IntegrationService);
+    storage.internal.middlewareStack.add(next => async args => {
+      try { return await next(args); }
+      catch (error) {
+        const failure = error as { name?: string; message?: string; $metadata?: { httpStatusCode?: number } };
+        let message = failure.message ?? 'Unknown S3 failure';
+        for (const value of [storage.config.minioAccessKey, storage.config.minioSecretKey]) message = message.replaceAll(value, '[redacted]');
+        t.diagnostic(`S3 failure: ${failure.name}, HTTP=${failure.$metadata?.httpStatusCode ?? 'none'}, ${message}`);
+        throw error;
+      }
+    }, { step: 'initialize', name: 'e2eStorageDiagnostics' });
     const requests = new Map<string, number>();
     async function request<T = unknown>(method: string, path: string, expected: number, token?: string, body?: unknown): Promise<T> {
       if (token) {
@@ -173,40 +184,118 @@ test('real backend integration: tenant isolation, workflow, storage, exports and
     t.diagnostic('Real MinIO upload, immutable promotion and attachment validation');
     const pdf = Buffer.from('%PDF-1.7\nE2E evidence original\n%%EOF\n');
     async function upload(session: Tokens, content: Buffer) {
-      const signed = await request<UploadUrl>('POST', '/storage/presigned-upload', 201, session.accessToken, {
+      const prepared = await request<PreparedUpload>('POST', '/storage/uploads', 201, session.accessToken, {
         filename: 'evidence.pdf', mimeType: 'application/pdf', fileSizeBytes: content.length, year, month: 1,
       });
-      const put = await fetch(signed.uploadUrl, { method: 'PUT', headers: signed.requiredHeaders, body: content, signal: AbortSignal.timeout(10_000) });
-      assert.equal(put.status, 200, await put.text());
-      return signed;
+      assert.ok(prepared.expiresInSeconds > 0);
+      assert.ok(!('uploadUrl' in prepared));
+      const put = await fetch(`${base}/storage/uploads/${prepared.uploadId}/content`, {
+        method: 'PUT', headers: { Authorization: `Bearer ${session.accessToken}`, 'Content-Type': 'application/octet-stream', 'Content-Length': String(content.length) },
+        body: content, signal: AbortSignal.timeout(10_000),
+      });
+      const received = await put.json() as { success: boolean; statusCode: number; data: { uploadId: string; status: string } };
+      assert.equal(put.status, 200, JSON.stringify(received));
+      assert.equal(received.success, true);
+      assert.equal(received.statusCode, 200);
+      assert.deepEqual(received.data, { uploadId: prepared.uploadId, status: 'PENDING' });
+      return prepared;
     }
-    const signed = await upload(a, pdf);
-    const finalized = await request<{ objectKey: string; status: string }>('POST', `/storage/uploads/${signed.uploadId}/finalize`, 200, a.accessToken);
+    const prepared = await upload(a, pdf);
+    const pending = await db.upload.findUniqueOrThrow({ where: { id: prepared.uploadId } });
+    assert.equal(pending.objectKey, prepared.objectKey);
+    assert.equal(pending.status, 'PENDING');
+    const stagedBefore = await storage.internal.send(new GetObjectCommand({ Bucket: storage.config.evidenceBucket, Key: prepared.objectKey }));
+    assert.deepEqual(Buffer.from(await stagedBefore.Body!.transformToByteArray()), pdf);
+    const pendingReplay = await fetch(`${base}/storage/uploads/${prepared.uploadId}/content`, {
+      method: 'PUT', headers: { Authorization: `Bearer ${a.accessToken}`, 'Content-Type': 'application/octet-stream', 'Content-Length': String(pdf.length) },
+      body: Buffer.alloc(pdf.length, 'X'), signal: AbortSignal.timeout(10_000),
+    });
+    assert.equal(pendingReplay.status, 409, await pendingReplay.text());
+    const stagedAfter = await storage.internal.send(new GetObjectCommand({ Bucket: storage.config.evidenceBucket, Key: prepared.objectKey }));
+    assert.equal(stagedAfter.ETag, stagedBefore.ETag);
+    assert.deepEqual(Buffer.from(await stagedAfter.Body!.transformToByteArray()), pdf);
+    assert.deepEqual(await db.upload.findUniqueOrThrow({ where: { id: prepared.uploadId } }), pending);
+
+    const concurrent = await request<PreparedUpload>('POST', '/storage/uploads', 201, a.accessToken, {
+      filename: 'concurrent.pdf', mimeType: 'application/pdf', fileSizeBytes: pdf.length, year, month: 1,
+    });
+    const concurrentBefore = await db.upload.findUniqueOrThrow({ where: { id: concurrent.uploadId } });
+    const contents = [pdf, Buffer.from(pdf)];
+    contents[1]!.write('X', 10, 'ascii');
+    const contenders = await Promise.all(contents.map(body => fetch(`${base}/storage/uploads/${concurrent.uploadId}/content`, {
+      method: 'PUT', headers: { Authorization: `Bearer ${a.accessToken}`, 'Content-Type': 'application/octet-stream', 'Content-Length': String(body.length) },
+      body, signal: AbortSignal.timeout(10_000),
+    })));
+    assert.deepEqual(contenders.map(response => response.status).sort(), [200, 409]);
+    for (const response of contenders) await response.arrayBuffer();
+    const winner = await storage.internal.send(new GetObjectCommand({ Bucket: storage.config.evidenceBucket, Key: concurrent.objectKey }));
+    assert.deepEqual(Buffer.from(await winner.Body!.transformToByteArray()), contents[contenders.findIndex(response => response.status === 200)]);
+    assert.deepEqual(await db.upload.findUniqueOrThrow({ where: { id: concurrent.uploadId } }), concurrentBefore);
+
+    const partial = await request<PreparedUpload>('POST', '/storage/uploads', 201, a.accessToken, {
+      filename: 'partial.pdf', mimeType: 'application/pdf', fileSizeBytes: 1024 * 1024, year, month: 1,
+    });
+    const partialBefore = await db.upload.findUniqueOrThrow({ where: { id: partial.uploadId } });
+    let started!: () => void;
+    let settled!: () => void;
+    const transferStarted = new Promise<void>(resolve => { started = resolve; });
+    const transferSettled = new Promise<void>(resolve => { settled = resolve; });
+    storage.internal.middlewareStack.add((next, context) => async args => {
+      if (context.commandName !== 'PutObjectCommand' || (args.input as { Key?: string }).Key !== partial.objectKey) return next(args);
+      started();
+      try { return await next(args); } finally { settled(); }
+    }, { step: 'initialize', name: 'e2ePartialUpload' });
+    const partialRequest = httpRequest(`${base}/storage/uploads/${partial.uploadId}/content`, {
+      method: 'PUT', headers: { Authorization: `Bearer ${a.accessToken}`, 'Content-Type': 'application/octet-stream', 'Content-Length': String(partialBefore.sizeBytes) },
+    });
+    partialRequest.on('error', () => { /* The client deliberately closes an incomplete request. */ });
+    try {
+      partialRequest.write(pdf.subarray(0, 8));
+      await Promise.race([transferStarted, delay(5000, undefined, { ref: false }).then(() => assert.fail('Partial upload never reached S3'))]);
+      partialRequest.destroy();
+      await Promise.race([transferSettled, delay(5000, undefined, { ref: false }).then(() => assert.fail('Aborted S3 transfer did not settle'))]);
+      assert.deepEqual(await db.upload.findUniqueOrThrow({ where: { id: partial.uploadId } }), partialBefore);
+      assert.equal(await db.monthlyRecord.count({ where: { evidenceId: partial.uploadId } }), 0);
+      assert.equal(await db.auditLog.count({ where: { healthCenterId: centerA.id, action: 'UPLOAD_CONTENT_RECEIVED', details: { path: ['uploadId'], equals: partial.uploadId } } }), 0);
+    } finally {
+      partialRequest.destroy();
+      storage.internal.middlewareStack.remove('e2ePartialUpload');
+    }
+    const finalized = await request<{ objectKey: string; status: string }>('POST', `/storage/uploads/${prepared.uploadId}/finalize`, 200, a.accessToken);
     assert.equal(finalized.status, 'READY');
-    assert.notEqual(finalized.objectKey, signed.objectKey);
+    assert.notEqual(finalized.objectKey, prepared.objectKey);
     assert.ok(finalized.objectKey.startsWith(`evidence/${centerA.id}/`));
     const headBefore = await storage.internal.send(new HeadObjectCommand({ Bucket: storage.config.evidenceBucket, Key: finalized.objectKey }));
     assert.equal(headBefore.ContentLength, pdf.length);
     const replacement = Buffer.alloc(pdf.length, 'X');
-    const replay = await fetch(signed.uploadUrl, { method: 'PUT', headers: signed.requiredHeaders, body: replacement, signal: AbortSignal.timeout(10_000) });
-    assert.equal(replay.status, 200, await replay.text());
+    const replay = await fetch(`${base}/storage/uploads/${prepared.uploadId}/content`, {
+      method: 'PUT', headers: { Authorization: `Bearer ${a.accessToken}`, 'Content-Type': 'application/octet-stream', 'Content-Length': String(replacement.length) },
+      body: replacement, signal: AbortSignal.timeout(10_000),
+    });
+    assert.equal(replay.status, 409, await replay.text());
     const headAfter = await storage.internal.send(new HeadObjectCommand({ Bucket: storage.config.evidenceBucket, Key: finalized.objectKey }));
     assert.equal(headAfter.ETag, headBefore.ETag);
     assert.equal(headAfter.ContentLength, headBefore.ContentLength);
-    const download = await request<{ downloadUrl: string }>('GET', `/storage/presigned-download?uploadId=${signed.uploadId}`, 200, a.accessToken);
-    const downloaded = await fetch(download.downloadUrl, { signal: AbortSignal.timeout(10_000) });
+    const downloaded = await fetch(`${base}/storage/download?uploadId=${prepared.uploadId}`, {
+      headers: { Authorization: `Bearer ${a.accessToken}` }, signal: AbortSignal.timeout(10_000),
+    });
     assert.equal(downloaded.status, 200);
+    assert.equal(downloaded.headers.get('content-type'), 'application/pdf');
+    assert.equal(downloaded.headers.get('content-length'), String(pdf.length));
+    assert.equal(downloaded.headers.get('content-disposition'), 'attachment; filename="evidence.pdf"');
+    assert.equal(downloaded.headers.get('cache-control'), 'private, no-store');
+    assert.equal(downloaded.headers.get('x-content-type-options'), 'nosniff');
     assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), pdf);
-    const retry = await request<{ objectKey: string }>('POST', `/storage/uploads/${signed.uploadId}/finalize`, 200, a.accessToken);
+    const retry = await request<{ objectKey: string }>('POST', `/storage/uploads/${prepared.uploadId}/finalize`, 200, a.accessToken);
     assert.equal(retry.objectKey, finalized.objectKey);
-    await request('GET', `/storage/presigned-download?uploadId=${signed.uploadId}`, 404, b.accessToken);
-    await request('PUT', '/records/monthly', 400, b.accessToken, { year, month: 1, records: [{ indicatorId: first, pencapaianRiil: 0, evidenceId: signed.uploadId }] });
+    await request('GET', `/storage/download?uploadId=${prepared.uploadId}`, 404, b.accessToken);
+    await request('PUT', '/records/monthly', 400, b.accessToken, { year, month: 1, records: [{ indicatorId: first, pencapaianRiil: 0, evidenceId: prepared.uploadId }] });
     const malformed = await upload(a, Buffer.from('not a PDF document'));
     await request('POST', `/storage/uploads/${malformed.uploadId}/finalize`, 400, a.accessToken);
     assert.equal((await db.upload.findUniqueOrThrow({ where: { id: malformed.uploadId } })).status, 'PENDING');
-    await request('POST', '/storage/presigned-upload', 400, a.accessToken, { filename: 'large.pdf', mimeType: 'application/pdf', fileSizeBytes: MAX_UPLOAD_BYTES + 1, year, month: 1 });
-    await request('PUT', '/records/monthly', 200, a.accessToken, { year, month: 1, records: [{ indicatorId: first, pencapaianRiil: 0, evidenceId: signed.uploadId }] });
-    assert.equal((await db.upload.findUniqueOrThrow({ where: { id: signed.uploadId } })).status, 'ATTACHED');
+    await request('POST', '/storage/uploads', 400, a.accessToken, { filename: 'large.pdf', mimeType: 'application/pdf', fileSizeBytes: MAX_UPLOAD_BYTES + 1, year, month: 1 });
+    await request('PUT', '/records/monthly', 200, a.accessToken, { year, month: 1, records: [{ indicatorId: first, pencapaianRiil: 0, evidenceId: prepared.uploadId }] });
+    assert.equal((await db.upload.findUniqueOrThrow({ where: { id: prepared.uploadId } })).status, 'ATTACHED');
 
     t.diagnostic('Complete Q1, year locking, revision checks and official snapshot stability');
     const allRecords = ids.map(indicatorId => ({ indicatorId, pencapaianRiil: 0 }));
@@ -287,17 +376,23 @@ test('real backend integration: tenant isolation, workflow, storage, exports and
 
     t.diagnostic('Real Redis export worker, report downloads and disabled provincial bridge');
     for (const format of ['excel', 'pdf']) {
-      const queued = await request<{ jobId: string }>('POST', `/export/${format}/sheet7`, 202, d.accessToken, { healthCenterId: centerA.id, year, quarter: 1 });
+      const queued: { jobId: string } = await request<{ jobId: string }>('POST', `/export/${format}/sheet7`, 202, d.accessToken, { healthCenterId: centerA.id, year, quarter: 1 });
       await request('GET', `/export/jobs/${queued.jobId}`, 404, b.accessToken);
       const deadline = Date.now() + 30_000;
       let completed = false;
       while (Date.now() < deadline) {
-        const job = await request<{ status: string; error: string | null; downloadUrl?: string }>('GET', `/export/jobs/${queued.jobId}?healthCenterId=${centerA.id}`, 200, d.accessToken);
+        const job = await request<{ status: string; error: string | null; downloadPath?: string; filename?: string }>('GET', `/export/jobs/${queued.jobId}?healthCenterId=${centerA.id}`, 200, d.accessToken);
         assert.notEqual(job.status, 'FAILED', `Export ${queued.jobId}: ${job.error}`);
         if (job.status === 'COMPLETED') {
-          assert.ok(job.downloadUrl);
-          const report = await fetch(job.downloadUrl, { signal: AbortSignal.timeout(10_000) });
+          assert.equal(job.downloadPath, `/export/jobs/${queued.jobId}/content?healthCenterId=${centerA.id}`);
+          assert.equal(job.filename, `sheet7-${year}-1.${format === 'excel' ? 'xlsx' : 'pdf'}`);
+          assert.ok(!('downloadUrl' in job));
+          const report = await fetch(`${base}${job.downloadPath}`, {
+            headers: { Authorization: `Bearer ${d.accessToken}` }, signal: AbortSignal.timeout(10_000),
+          });
           assert.equal(report.status, 200);
+          assert.equal(report.headers.get('content-disposition'), `attachment; filename="${job.filename}"`);
+          assert.equal(report.headers.get('cache-control'), 'private, no-store');
           const bytes = Buffer.from(await report.arrayBuffer());
           assert.ok(bytes.length > 100);
           assert.equal(bytes.subarray(0, format === 'excel' ? 4 : 5).toString('binary'), format === 'excel' ? 'PK\x03\x04' : '%PDF-');

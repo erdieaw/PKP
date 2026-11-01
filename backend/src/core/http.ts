@@ -32,7 +32,13 @@ export class ApiExceptionFilter implements ExceptionFilter {
         statusCode = 400; message = 'Invalid request body'; error = 'Bad Request';
       }
     }
-    host.switchToHttp().getResponse<Response>().status(statusCode).json({
+    const response = host.switchToHttp().getResponse<Response>();
+    if (response.headersSent || response.destroyed) {
+      if (!response.destroyed) response.destroy();
+      return;
+    }
+    response.setHeader('Cache-Control', 'private, no-store');
+    response.status(statusCode).json({
       success: false, statusCode, message, error, meta: { timestamp: new Date().toISOString() },
     });
   }

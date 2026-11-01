@@ -6,6 +6,8 @@ import { ChangePasswordDto, LoginDto, RefreshDto } from './auth.dto';
 @Controller('auth')
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
+  @Public() @Get('login-config') @HttpCode(200) @Header('Cache-Control', 'no-store')
+  loginConfig() { return this.auth.loginConfig(); }
   @Public() @Post('login') @HttpCode(200) @Header('Cache-Control', 'no-store')
   login(@Body() dto: LoginDto) { return this.auth.login(dto); }
   @Public() @Post('refresh') @HttpCode(200) @Header('Cache-Control', 'no-store')

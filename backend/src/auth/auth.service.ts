@@ -8,6 +8,7 @@ import { Actor } from '../core/auth.decorators';
 import { audit } from '../core/audit';
 import { DbService } from '../core/db.service';
 import { ChangePasswordDto, LoginDto } from './auth.dto';
+import { TurnstileService } from './turnstile.service';
 
 export const safeUserSelect = {
   id: true, username: true, email: true, name: true, nip: true, role: true,
@@ -26,7 +27,7 @@ export class AuthService {
   private readonly config = getConfig();
   // A real hash keeps unknown-user login on the same expensive verification path.
   private readonly dummyHash = hash(randomBytes(32), { type: argon2id });
-  constructor(private readonly db: DbService, private readonly jwt: JwtService) {}
+  constructor(private readonly db: DbService, private readonly jwt: JwtService, private readonly turnstile: TurnstileService) {}
 
   private active(user: AuthUser | null): asserts user is AuthUser {
     if (!user || user.status !== 'ACTIVE' ||
@@ -48,7 +49,10 @@ export class AuthService {
     return { accessToken, refreshToken, tokenType: 'Bearer', expiresIn: this.config.accessTokenSeconds, user: safeUser };
   }
 
+  loginConfig() { return this.turnstile.loginConfig(); }
+
   async login(dto: LoginDto) {
+    await this.turnstile.verify(dto.turnstileToken);
     const candidate = await this.db.user.findUnique({ where: { username: dto.username }, select: { id: true, passwordHash: true } });
     const valid = await verify(candidate?.passwordHash ?? await this.dummyHash, dto.password).catch(() => false);
     if (!candidate || !valid) throw new UnauthorizedException('Username atau kata sandi salah. Periksa kembali dan coba lagi. Jika tetap tidak bisa masuk, hubungi administrator.');
