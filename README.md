@@ -83,7 +83,7 @@ Compose mengganti alamat dependency internal app; env host tetap memakai publish
 
 ## Deployment Dokploy
 
-Konfigurasi FE/BE untuk `https://pkp.pkm-ujungpangkah.online` tersedia di [`compose.dokploy.yml`](compose.dokploy.yml), terpisah dari Compose lokal. Traefik mengarah ke frontend Nginx port **8080**; API tetap same-origin di `/api/v1`, backend tidak dipublikasikan langsung. Contoh environment, IP proxy, domain storage HTTPS, provisioning dan update tanpa reset data ada di [panduan Dokploy](deploy/README.md).
+Konfigurasi FE/BE untuk `https://pkp.pkm-ujungpangkah.online` tersedia di [`compose.dokploy.yml`](compose.dokploy.yml), terpisah dari Compose lokal. Traefik mengarah ke frontend Nginx port **8080**; API tetap same-origin di `/api/v1`, backend tidak dipublikasikan langsung. Urutan setup UI, [generator secret instalasi baru](deploy/generate-env.mjs), key Turnstile/SILO, IP proxy, storage privat, provisioning dan update tanpa reset data ada di [panduan Dokploy](deploy/README.md). Generator menulis file privat `deploy/dokploy.env` tanpa mencetak secret atau menimpa file existing; bukan alat rotasi key/konfigurasi DB existing.
 
 ## API Dan Deployment
 

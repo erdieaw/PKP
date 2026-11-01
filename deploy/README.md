@@ -2,6 +2,56 @@
 
 Gunakan `compose.dokploy.yml` dari **root repository**, terpisah dari `backend/compose.yml` untuk development. File ini menyiapkan FE, BE, PostgreSQL dan Redis berpassword. Storage memakai **MinIO/SILO eksternal privat yang wajib dikonfigurasi**, bukan service MinIO lokal. Hanya FE bergabung ke `dokploy-network`; app dan job operator `ops` mengakses storage lewat jaringan privat. Tidak ada published port host atau `container_name` tetap. Biarkan nama project Compose stabil agar volume DB/Redis tetap sama saat redeploy. Definisi `minio_data` lama sengaja dipertahankan tanpa dipasang ke runtime baru; jangan hapus volumenya.
 
+## Urutan Deploy Dari Awal
+
+1. Tentukan apakah ini **instalasi baru** atau **pemindahan/redeploy data existing**. Untuk existing, gunakan secret, project name, volume dan nama bucket existing; jangan jalankan generator atau seed. Backup/restore dan migrasi object adalah pekerjaan terpisah di bagian akhir panduan.
+2. Siapkan server Dokploy dengan Docker Compose plugin, DNS domain FE, TLS, akses keluar Cloudflare, serta rute Tailscale ke SILO. Node.js **22+** hanya diperlukan pada mesin tempat menjalankan generator; script tidak memerlukan `npm install` dan boleh dijalankan di laptop operator.
+3. Di Dokploy, buat project/environment lalu service **Docker Compose** dari repository Git ini. Pilih branch/commit rilis, context root repository dan Compose path `./compose.dokploy.yml`. Simpan konfigurasi sumber **tanpa Deploy dulu**. Pastikan repository dapat diakses oleh integrasi Git Dokploy.
+4. Temukan nama project Compose aktual yang akan dipakai Dokploy (`-p`/`--project-name` pada konfigurasi/perintah deployment), bukan hanya display name. Jika belum terlihat, gunakan preview/configuration deployment; jangan membuat project name kedua untuk job CLI. Nama ini menjadi argumen `--project` generator.
+5. Untuk instalasi baru, jalankan generator di bagian berikut, lalu lengkapi field layanan eksternal. Isi editor **Environment** Dokploy dengan isi file privat melalui editor/clipboard lokal tepercaya, bukan lewat chat, issue, log CI atau output terminal publik. Simpan salinan privat yang sama di server untuk job CLI; jangan commit file tersebut.
+6. Gunakan routing labels bawaan file ini: **jangan tambahkan domain otomatis di UI Dokploy**. Untuk kontrak network saat ini, nonaktifkan **Isolated Deployments** Dokploy; file sudah membuat bridge privat sendiri. Periksa **Preview Compose** untuk memastikan hanya frontend masuk `dokploy-network`, tidak ada port publik DB/Redis/MinIO, serta entrypoint/resolver cocok dengan Traefik server. Jangan menyalin preview yang memuat secret ke log/chat.
+7. Ambil IP Traefik sesuai bagian **IP Proxy Dan Rate Limit**, isi `TRAEFIK_TRUSTED_PROXY`, lalu validasi Compose. Dari checkout rilis yang benar pada server target, build dan jalankan dependency/job operator sesuai bagian **Provisioning Pertama**. Jalankan migrasi sekali, seed hanya untuk DB baru yang disetujui, kemudian hidupkan app/frontend.
+8. Tekan **Deploy** di Dokploy dengan commit, environment dan project name yang sama, lalu jalankan checklist **Update Dan Verifikasi**. Jangan membuka layanan untuk pengguna sebelum login Turnstile, readiness, upload/finalize/download dan ekspor berhasil.
+
+Dokploy menulis Environment ke file `.env` untuk interpolasi Compose, bukan otomatis mengirim seluruh variabel ke setiap container. File ini sudah memilih variabel yang diperlukan melalui `${VAR_NAME}`; **jangan menambahkan `env_file: .env` ke frontend**. Untuk pekerjaan CLI, gunakan `--env-file deploy/dokploy.env` seperti contoh; jangan `source` file env atau menyisipkan password sebagai argumen command. Environment shell yang sudah diekspor dapat mengalahkan nilai `--env-file`; gunakan sesi operator tanpa override lama.
+
+## Generate Secret Instalasi Baru
+
+Script [generate-env.mjs](generate-env.mjs) membaca **hanya template repository**, bukan `.env` existing atau secret dari shell. Default output adalah `deploy/dokploy.env`, relatif terhadap lokasi script, dengan permission `0600` pada Linux. Script memakai create-exclusive: file/symlink yang sudah ada ditolak, tanpa opsi overwrite/force. Tidak ada koneksi ke DB, Docker, SILO atau Cloudflare, dan tidak ada secret yang dicetak.
+
+Dari root repository, ganti `nama-project-compose-aktual` dengan nilai Dokploy yang sudah diverifikasi:
+
+```bash
+node deploy/generate-env.mjs --help
+node deploy/generate-env.mjs --project nama-project-compose-aktual --domain pkp.pkm-ujungpangkah.online --bootstrap-user dinkes.admin
+```
+
+Perintah kedua adalah **alternatif satu kali untuk instalasi baru**, bukan langkah setiap deploy. Jangan menjalankannya jika akan memakai DB/backup existing. Hasilnya:
+
+- `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `JWT_SECRET`: masing-masing 32 byte acak independen dalam hex (64 karakter).
+- `DATABASE_URL` dan `REDIS_URL`: otomatis cocok dengan password yang dibuat, hostname internal `postgres`/`redis`, serta user/database default `sipkp`. Jika mengubah user/database/password, ubah URL pasangannya juga; password pada URL harus URL-encoded.
+- `PROVINCE_CREDENTIAL_KEY`: tepat 32 byte acak dalam canonical base64. Ini key enkripsi kredensial provinsi, bukan API key yang didapat dari layanan provinsi. Simpan bersama backup secara aman tetapi terpisah dari data; key hilang/salah membuat kredensial tersimpan tidak bisa didekripsi.
+- Dengan `--bootstrap-user`, username itu dan password acak 64 karakter diisi untuk admin Dinkes pertama. Tanpa opsi ini, kedua field bootstrap tetap kosong. Password ada di file privat, bukan di output generator.
+- `COMPOSE_PROJECT_NAME` dan `PKP_DOMAIN` diisi dari argumen. Field eksternal tetap kosong agar konfigurasi yang belum lengkap tidak terlihat siap deploy.
+
+`deploy/dokploy.env` sudah diabaikan Git. Opsi `--output /path/privat/dokploy.env` tersedia jika parent directory sudah ada; path custom **tidak otomatis diabaikan Git**, jadi pilih lokasi privat di luar repository. Lindungi juga direktori, editor backup, clipboard dan backup file; permission Linux bukan pengganti enkripsi disk/backup. Jangan menghapus file existing untuk sekadar membuat ulang key saat redeploy. Rotasi JWT mencabut validitas token, rotasi key provinsi butuh migrasi enkripsi, dan perubahan env password PostgreSQL **tidak** mengganti password role dalam volume DB existing.
+
+### Key Yang Harus Dibuat Pada Layanan
+
+**Cloudflare Turnstile:** buka dashboard Cloudflare > Turnstile > Add widget, beri nama aplikasi, pilih **Managed**, dan daftarkan hostname FE tanpa `https://` atau path. Salin Site Key ke `TURNSTILE_SITE_KEY` dan Secret Key ke `TURNSTILE_SECRET_KEY` dalam file/editor privat. Script acak tidak dapat menggantikan pasangan key Cloudflare; jangan gunakan testing keys untuk produksi. Tidak perlu API token Cloudflare dalam env aplikasi ini.
+
+**SILO/MinIO:** masuk console melalui akses operator privat dan pilih instance yang benar untuk bucket `pkponline` di API port **9100**. Buat akun runtime/access key/service account khusus PKP sesuai fitur SILO yang tersedia, pasang policy bucket/prefix terbatas sesuai bagian **Environment Dokploy**, lalu masukkan pasangan yang diterbitkan ke `MINIO_ACCESS_KEY`/`MINIO_SECRET_KEY`. Jangan memakai login admin/root console. Bucket harus tetap PRIVATE; jangan menambah policy anonymous/public-read.
+
+Jika console mendukung input access key dan secret sendiri, generator punya opsi **calon kredensial** berikut sebagai pengganti perintah generate sebelumnya:
+
+```bash
+node deploy/generate-env.mjs --project nama-project-compose-aktual --bootstrap-user dinkes.admin --minio-credentials
+```
+
+Opsi tersebut membuat `MINIO_ACCESS_KEY` 20 karakter dengan prefix `PKP` dan secret dari 30 byte acak dalam base64 (40 karakter, 240 bit) di file output yang sama. **Belum ada akun/izin yang dibuat di SILO.** Daftarkan pasangan itu lewat console/operator privat dan pasang policy dahulu; bila SILO hanya menerbitkan key sendiri, ganti kedua nilai dengan hasil SILO. Jangan menganggap random key langsung dapat login S3. Console dan key MinIO tidak dibagikan ke browser pengguna.
+
+Lengkapi juga `MINIO_ENDPOINT` dengan scheme/hostname/port privat yang diverifikasi, misalnya `http://pkm-u-pangka-01.tail1897af.ts.net:9100` **hanya jika HTTP dan MagicDNS dari container sudah dipastikan**. Jangan menyalin alamat console atau mengganti 9100 menjadi 9000. `TRAEFIK_TRUSTED_PROXY` berasal dari inspect network server, bukan random key. Setelah seluruh field wajib terisi, jalankan `config --quiet` dan probe pada bagian selanjutnya; generator bukan validator kredensial maupun persetujuan cutover.
+
 ## Domain Dan Routing
 
 - FE: `https://pkp.pkm-ujungpangkah.online` -> Traefik -> Nginx **8080**.
@@ -20,8 +70,8 @@ Isi Environment dari `deploy/dokploy.env.example`, lalu lengkapi semua nilai waj
 
 - `DATABASE_URL`: URL **internal**, contoh format `postgresql://sipkp:<password-URL-encoded>@postgres:5432/sipkp?schema=public`. User/database/password harus cocok dengan `POSTGRES_*`.
 - `REDIS_URL`: `redis://:<password-URL-encoded>@redis:6379`, cocok dengan `REDIS_PASSWORD`.
-- `JWT_SECRET`: secret acak minimal 32 karakter. Contoh generator: `openssl rand -hex 32`; buat secret PostgreSQL/Redis/MinIO secara independen.
-- `PROVINCE_CREDENTIAL_KEY`: canonical base64 dari tepat 32 byte acak, misalnya `openssl rand -base64 32`. Pertahankan key jika memindahkan data terenkripsi existing, simpan backup terpisah. Jangan rotasi tanpa prosedur migrasi kredensial.
+- `JWT_SECRET`: secret acak minimal 32 karakter; generator di atas membuat 64 karakter hex. Buat secret PostgreSQL/Redis/MinIO secara independen.
+- `PROVINCE_CREDENTIAL_KEY`: canonical base64 dari tepat 32 byte acak, dibuat oleh generator di atas. Pertahankan key jika memindahkan data terenkripsi existing, simpan backup terpisah. Jangan rotasi tanpa prosedur migrasi kredensial.
 - `MINIO_ENDPOINT`: URL S3 privat **wajib eksplisit**, termasuk scheme dan port yang diverifikasi operator. Endpoint yang dilaporkan untuk bucket yang disetujui adalah SILO `pkm-u-pangka-01.tail1897af.ts.net:9100`, bucket `pkponline`. Ini bukan hasil uji koneksi dari container; verifikasi HTTP/HTTPS dan sertifikat sebelum mengisi URL. **Jangan menggantinya dengan port 9000**: belum terbukti instance atau datanya sama. Contoh env sengaja membiarkan endpoint kosong.
 - `MINIO_ACCESS_KEY` minimal 3 karakter dan `MINIO_SECRET_KEY` minimal 8 karakter: akun runtime khusus, secret panjang acak, **bukan root/admin SILO**. Batasi policy ke bucket/prefix yang diperlukan serta operasi aktual backend: pemeriksaan bucket, baca/tulis object, copy staging ke evidence (read source + write destination), dan hapus staging bila dipakai cleanup. Jangan berikan admin, perubahan bucket policy, penghapusan bucket atau pembuatan bucket pada akun runtime. Review kebutuhan `HeadBucket` (izin `s3:ListBucket` bucket-scoped pada MinIO) dan kondisi prefix agar readiness tetap berfungsi; jangan menganggap policy object-only cukup.
 - `EVIDENCE_BUCKET=pkponline`, `REPORTS_BUCKET=pkponline`: kedua bucket boleh sama. Pemisahan key memakai `staging/`, `evidence/`, dan `reports/`, bukan akses publik. Runtime tidak membuat bucket. Pertahankan nama variabel dan nilai bucket pada konfigurasi existing; nilai contoh bukan instruksi mengalihkan data. Perubahan nilai bucket memerlukan migrasi object terpisah.
@@ -118,7 +168,7 @@ Di Dokploy pilih tipe Docker Compose dengan compose path `compose.dokploy.yml`, 
 Validasi struktur Compose, contoh env dan aturan proxy dengan fixture tanpa membaca `.env` aktual:
 
 ```bash
-node --test tests/dokploy.test.mjs tests/deployment-nginx.test.mjs
+node --test tests/deploy-env.test.mjs tests/dokploy.test.mjs tests/deployment-nginx.test.mjs
 ```
 
 Tes Compose memerlukan Docker Compose plugin dan tidak menyalakan service; `--env-file /dev/null` serta `--no-env-resolution` pada Compose lokal mencegah pembacaan env aktual. Dua tes Nginx runtime di-skip kecuali `NGINX_TEST_IMAGE` menunjuk image frontend **yang sudah ada lokal**. Contoh (ganti tag lokal, tidak pull/build image):
@@ -145,3 +195,14 @@ Jangan gunakan `down -v`, menghapus volume, mengganti project name, atau seed ul
 Peralihan dari bucket `evidence`/`reports` pada MinIO lama ke `pkponline` pada SILO adalah **migrasi data tersendiri yang perlu persetujuan**, bukan efek mengganti endpoint/env. Inventarisasi instance, bucket, ukuran/checksum/versioning dan referensi `objectKey` di DB terlebih dahulu; pertahankan backup volume `minio_data`, DB, object, dan key enkripsi. Salin object dengan key/prefix persis, verifikasi collision jika bucket digabung, kecocokan metadata yang dipakai validasi backend, serta seluruh referensi DB sebelum cutover. Jangan mengasumsikan prefix lama boleh diganti atau object pada port 9000 juga ada di 9100. Rencanakan freeze write/rekonsiliasi dan rollback untuk mencegah data terbelah. Jangan menghapus sumber setelah hanya melihat health/readiness hijau.
 
 Jangan mengubah `objectKey`, re-seed, menghitung ulang histori bulanan/tahunan, memigrasikan aturan PKP, atau mengganti snapshot untuk menyelesaikan perpindahan storage. Deploy kode dan migrasi DB schema bukan izin migrasi object/data historis. Catat blocker endpoint/scheme, kredensial/policy, konektivitas container, kesiapan gateway backend/frontend, dan data migration yang belum diverifikasi sebelum menyatakan siap cutover.
+
+## Troubleshooting Singkat
+
+- **Generator menolak file existing:** ini pengaman, bukan error yang perlu diatasi dengan menghapus file. Edit field eksternal yang belum diisi; untuk redeploy pakai kembali secret existing. Gunakan path baru hanya untuk instalasi baru yang benar-benar terpisah.
+- **Compose meminta field wajib:** isi field kosong pada Environment dan file privat CLI yang sama. Generator sengaja tidak membuat key Turnstile, IP proxy atau endpoint. Jangan menjalankan `docker compose config` tanpa `--quiet` pada terminal/log bersama.
+- **App unhealthy/frontend menunggu:** periksa migrasi schema, kecocokan DB/Redis credentials, DNS/rute/TLS SILO dari container dan izin `HeadBucket`. Health HTTP MinIO 200 tidak membuktikan kredensial benar. Jangan memperbaiki dengan seed ulang, mengganti volume, membuka bucket publik atau menonaktifkan TLS validation.
+- **Login challenge ditolak:** cocokkan pasangan key, hostname widget dan `PKP_DOMAIN`/`FRONTEND_URL`, waktu server serta akses keluar Cloudflare. Jangan mematikan `TURNSTILE_REQUIRED` pada produksi.
+- **502/TLS/routing salah:** cocokkan port frontend 8080, network Traefik dan entrypoint/resolver; hapus konflik router domain otomatis. Jika IP Traefik berubah, perbarui trust IP dan recreate frontend. Jangan mempercayai `0.0.0.0/0`.
+- **Data terlihat kosong setelah deploy:** hentikan write dan periksa project name/volume/database/endpoint/bucket, jangan seed untuk menutupi kesalahan target. Perubahan endpoint tidak memindahkan object atau histori.
+
+Rujukan perilaku Dokploy: [Docker Compose dan Environment](https://docs.dokploy.com/docs/core/docker-compose), [Domains dan Preview Compose](https://docs.dokploy.com/docs/core/docker-compose/domains), serta [Isolated Deployments](https://docs.dokploy.com/docs/core/docker-compose/utilities). Panduan ini memilih labels/network repository yang eksplisit, bukan domain/network otomatis Dokploy; cek preview pada versi server Anda.
