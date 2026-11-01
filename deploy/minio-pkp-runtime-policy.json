@@ -1,0 +1,30 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "BucketReadiness",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": ["arn:aws:s3:::pkponline"]
+    },
+    {
+      "Sid": "ApplicationObjects",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject"],
+      "Resource": [
+        "arn:aws:s3:::pkponline/staging/*",
+        "arn:aws:s3:::pkponline/evidence/*",
+        "arn:aws:s3:::pkponline/reports/*"
+      ]
+    },
+    {
+      "Sid": "UploadCleanup",
+      "Effect": "Allow",
+      "Action": ["s3:DeleteObject"],
+      "Resource": [
+        "arn:aws:s3:::pkponline/staging/*",
+        "arn:aws:s3:::pkponline/evidence/*"
+      ]
+    }
+  ]
+}

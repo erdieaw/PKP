@@ -41,6 +41,7 @@ dist-ssr/
 .env.production.local
 !.env.example
 /deploy/dokploy.env
+/deploy/pkp-storage.env
 
 # TypeScript build info
 *.tsbuildinfo
