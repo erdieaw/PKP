@@ -4,7 +4,8 @@
 
 @layer base {
   body {
-    @apply bg-slate-50 text-slate-800 antialiased selection:bg-emerald-500 selection:text-white;
+    background: var(--app-entry-background);
+    @apply text-slate-800 antialiased selection:bg-emerald-500 selection:text-white;
   }
 }
 
@@ -72,4 +73,3 @@
 .print-only {
   display: none;
 }
-

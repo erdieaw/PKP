@@ -14,19 +14,45 @@ import { pkpStore } from '/src/services/apiStore.ts';
 import { ExportReportModal } from '/src/components/export/ExportReportModal.tsx';
 import { OfficialPerformanceSheet7 } from '/src/components/official-sheet7/OfficialPerformanceSheet7.tsx';
 import { IndicatorDetailDrawer } from '/src/components/recommendation/IndicatorDetailDrawer.tsx';
+import { Do2026Editor } from '/src/components/data-entry/Do2026Editor.tsx';
 const indicator = { id: 'indicator', no: '1', sectionCode: '1.1', klasterId: 1, indikator: 'Fixture indicator', satuan: '%', polarity: 'POSITIVE' };
+const doIndicator = { ...indicator, id: 'do-indicator', indikator: 'Fixture DO indicator', do2026: {
+  status: 'IMPLEMENTED', numeratorLabel: 'Pembilang aktual (N)', denominatorLabel: 'Penyebut aktual (D)',
+  numeratorInput: 'INTEGER', denominatorInput: 'INTEGER', targetDisplay: '100%' } };
+const doRecord = { pencapaianRiil: 2, totalSasaran: 4, scoringVersion: 'DO_2026_V2', inputBasis: 'PERIOD_ACTUAL',
+  notes: 'Stored source', evidenceId: 'stored-evidence', isMissing: false };
 const summary = { year: 2025, quarter: 1, periodLabel: 'Triwulan 1', puskesmasName: 'Fixture', klasterScores: {}, rows: [] };
 pkpStore.state = { ...pkpStore.state, year: 2025, healthCenterId: 'center', activePeriod: { year: 2025 },
   user: { id: 'admin', role: 'ADMIN_PUSKESMAS', healthCenterId: 'center' }, indicators: [indicator],
   sheets: { 1: summary }, months: { 1: { indicator: { pencapaianRiil: 1, evidenceId: 'evidence', notes: '', isMissing: false } } } };
 const root = createRoot(document.getElementById('root'));
-const render = (view, month = 1) => root.render(view === 'modal'
+const render = (view, month = 1, options = {}) => {
+  let selectedIndicator = doIndicator, record = doRecord;
+  if (view.startsWith('do-')) {
+    if (options.unimplemented) selectedIndicator = { ...doIndicator, do2026: { ...doIndicator.do2026, status: 'UNRESOLVED_RULE' } };
+    record = { ...doRecord, ...(options.historicalYtd ? { inputBasis: 'YTD_ACTUAL' } : {}),
+      ...(options.missing ? { pencapaianRiil: null, isMissing: true, scoringVersion: undefined } : {}) };
+    pkpStore.state = { ...pkpStore.state, year: 2026, activePeriod: { year: 2026 }, indicators: [indicator, selectedIndicator],
+      periods: options.locked ? [{ periodNumber: month, isQuarter: false, status: 'VERIFIED' }] : [],
+      months: { ...pkpStore.state.months, [month]: { ...pkpStore.state.months[month], [doIndicator.id]: record } } };
+  }
+  root.render(view === 'modal'
   ? React.createElement(ExportReportModal, { isOpen: true, onClose: () => render('none'), selectedMonth: 1, puskesmasName: 'Fixture' })
   : view === 'sheet' ? React.createElement(OfficialPerformanceSheet7)
   : view === 'evidence' ? React.createElement(IndicatorDetailDrawer, { indicator, selectedMonth: month, onClose: () => render('none') })
+  : view === 'do-drawer' ? React.createElement(IndicatorDetailDrawer, { indicator: selectedIndicator, selectedMonth: month, onClose: () => render('none') })
+  : view === 'do-editor' ? React.createElement(Do2026Editor, { indicator: selectedIndicator, record, year: 2026, month,
+    canEdit: pkpStore.canInputOwnPeriod(2026) && !pkpStore.isPeriodLocked(2026, month), onClose: () => render('none') })
   : null);
+};
 api.setSession({ accessToken: 'old-access', refreshToken: 'fixture-refresh' });
-window.gateway = { api, store: pkpStore, render, downloads: [], revoked: [] };
+window.gateway = { api, store: pkpStore, render, downloads: [], revoked: [], saves: [], saveFailures: 0 };
+pkpStore.saveRecord = async (indicatorId, month, data, year = pkpStore.getCurrentYear()) => {
+  window.gateway.saves.push({ indicatorId, month, data: { ...data }, year });
+  if (window.gateway.saveFailures > 0) { window.gateway.saveFailures--; throw new Error('Monthly save failed'); }
+  pkpStore.state = { ...pkpStore.state, months: { ...pkpStore.state.months, [month]: {
+    ...pkpStore.state.months[month], [indicatorId]: { ...pkpStore.getMonthlyRecord(indicatorId, month), ...data } } } };
+};
 const create = URL.createObjectURL.bind(URL), revoke = URL.revokeObjectURL.bind(URL);
 URL.createObjectURL = blob => { const url = create(blob); window.gateway.downloads.push({ url, size: blob.size }); return url; };
 URL.revokeObjectURL = url => { window.gateway.revoked.push(url); revoke(url); };
@@ -61,6 +87,8 @@ test('authenticated private storage gateway frontend', async t => {
       page.setDefaultTimeout(30000);
       const requests = [], exceptions = [];
       page.on('pageerror', error => exceptions.push(error.message));
+      await page.route('**/*', route => new URL(route.request().url()).origin === new URL(origin).origin
+        ? route.continue() : route.abort());
       await page.route('**/api/v1/**', async route => {
         const request = route.request();
         const url = new URL(request.url());
@@ -75,6 +103,260 @@ test('authenticated private storage gateway frontend', async t => {
     const json = (route, data, status = 200) => route.fulfill({ status, json: { data } });
     const binary = route => route.fulfill({ status: 200, contentType: 'application/octet-stream',
       headers: { 'Content-Disposition': "attachment; filename=plain.pdf; filename*=UTF-8''bukti%20uji.pdf" }, body: Buffer.from([0, 255, 13, 10, 128]) });
+    const evidence = { name: 'fixture.pdf', mimeType: 'application/pdf', buffer: Buffer.from([0, 255, 13, 10, 128]) };
+    async function doFixture({ failAt, pauseAt } = {}) {
+      let attempt = 0, failed = false, release;
+      const gate = new Promise(resolve => { release = resolve; });
+      const result = await fixture(async (route, request) => {
+        assert.equal(request.auth, 'Bearer old-access');
+        if (request.path === '/storage/uploads') {
+          attempt++;
+          assert.equal(request.method, 'POST');
+          return json(route, { uploadId: `do-upload-${attempt}`, objectKey: 'private/do-key', expiresInSeconds: 300 });
+        }
+        assert.ok(['/content', '/finalize'].some(suffix => request.path === `/storage/uploads/do-upload-${attempt}${suffix}`));
+        const stage = request.path.endsWith('/content') ? 'content' : 'finalize';
+        assert.equal(request.method, stage === 'content' ? 'PUT' : 'POST');
+        if (stage === 'content') {
+          assert.equal(request.type, 'application/octet-stream');
+          assert.deepEqual(request.body, evidence.buffer);
+        }
+        if (stage === pauseAt) await gate;
+        if (stage === failAt && !failed) {
+          failed = true;
+          return route.fulfill({ status: 503, json: { message: `${stage} failed` } });
+        }
+        return stage === 'content' ? route.fulfill({ status: 204 }) : json(route, { filename: evidence.name });
+      });
+      return { ...result, release };
+    }
+    async function openDoEditor(page, view = 'do-editor', options = {}) {
+      await page.evaluate(({ view, options }) => window.gateway.render(view, 3, options), { view, options });
+      if (view === 'do-drawer') await page.getByRole('button', { name: 'Edit capaian dan bukti dukung', exact: true }).click();
+      const editor = page.getByRole('dialog', { name: 'Input DO 2026', exact: true });
+      await editor.waitFor();
+      return editor;
+    }
+
+    await t.test('DO drawer opens the real editor without legacy controls, including missing DO records', async () => {
+      for (const missing of [false, true]) {
+        const { page, requests, exceptions } = await fixture(route => route.abort());
+        try {
+          await page.evaluate(missing => window.gateway.render('do-drawer', 3, { missing }), missing);
+          const edit = page.getByRole('button', { name: 'Edit capaian dan bukti dukung', exact: true });
+          await edit.waitFor();
+          assert.equal(await page.getByRole('button', { name: 'Simpan Capaian', exact: true }).count(), 0);
+          assert.equal(await page.getByRole('spinbutton', { name: 'Realisasi fisik', exact: true }).count(), 0);
+          assert.equal(await page.getByText('Realisasi Fisik', { exact: false }).count(), 0);
+          await edit.click();
+          const editor = page.getByRole('dialog', { name: 'Input DO 2026', exact: true });
+          await editor.waitFor();
+          assert.equal(await editor.getByLabel('Pembilang aktual (N)', { exact: true }).inputValue(), missing ? '' : '2');
+          assert.equal(await editor.getByLabel('Penyebut aktual (D)', { exact: true }).inputValue(), '4');
+          assert.equal(await editor.getByLabel('Lampirkan bukti dukung', { exact: true }).isEnabled(), true);
+          assert.equal(await editor.getByRole('button', { name: 'Simpan', exact: true }).isEnabled(), true);
+          assert.equal(requests.length, 0);
+          assert.deepEqual(exceptions, []);
+        } finally { await page.close(); }
+      }
+    });
+
+    for (const view of ['do-editor', 'do-drawer']) {
+      await t.test(`${view} uploads evidence only on Simpan and saves finalized N/D, basis and notes`, async () => {
+        const { page, requests, exceptions, release } = await doFixture({ pauseAt: 'finalize' });
+        try {
+          const editor = await openDoEditor(page, view);
+          await editor.getByLabel('Pembilang aktual (N)', { exact: true }).fill('7');
+          await editor.getByLabel('Penyebut aktual (D)', { exact: true }).fill('11');
+          await editor.getByRole('textbox', { name: /^Catatan sumber data/ }).fill('Monthly source fixture');
+          const input = editor.getByLabel('Lampirkan bukti dukung', { exact: true });
+          assert.deepEqual((await input.getAttribute('accept')).split(',').sort(), ['.jpeg', '.jpg', '.pdf', '.png', '.xlsx']);
+          await input.setInputFiles(evidence);
+          await editor.getByText(`Bukti dipilih: ${evidence.name}`, { exact: true }).waitFor();
+          assert.equal(requests.length, 0, 'Selecting a file must not upload or download it');
+          const finalized = page.waitForRequest('**/storage/uploads/do-upload-1/finalize');
+          await editor.getByRole('button', { name: 'Simpan', exact: true }).click();
+          await finalized;
+          assert.equal(await input.isDisabled(), true);
+          assert.equal(await editor.getByRole('button', { name: 'Simpan', exact: true }).isDisabled(), true);
+          assert.deepEqual(await page.evaluate(() => window.gateway.saves), [], 'Do not save before finalization succeeds');
+          release();
+          await editor.waitFor({ state: 'detached' });
+          assert.deepEqual(requests.map(r => [r.method, r.path]), [
+            ['POST', '/storage/uploads'], ['PUT', '/storage/uploads/do-upload-1/content'], ['POST', '/storage/uploads/do-upload-1/finalize'],
+          ]);
+          assert.deepEqual(JSON.parse(requests[0].body), { healthCenterId: 'center', year: 2026, month: 3,
+            filename: evidence.name, mimeType: evidence.mimeType, fileSizeBytes: evidence.buffer.length });
+          assert.deepEqual(await page.evaluate(() => window.gateway.saves), [{ indicatorId: 'do-indicator', month: 3, year: 2026,
+            data: { pencapaianRiil: 7, totalSasaran: 11, scoringVersion: 'DO_2026_V2', inputBasis: 'PERIOD_ACTUAL',
+              notes: 'Monthly source fixture', evidenceId: 'do-upload-1' } }]);
+          assert.deepEqual(exceptions, []);
+        } finally { release(); await page.close(); }
+      });
+    }
+
+    await t.test('DO evidence accepts PDF/PNG/JPEG/XLSX up to 10 MiB and rejects larger files locally', async () => {
+      const { page, requests } = await fixture(route => route.abort());
+      try {
+        const editor = await openDoEditor(page);
+        const input = editor.getByLabel('Lampirkan bukti dukung', { exact: true });
+        for (const [extension, mimeType] of [['pdf', 'application/pdf'], ['png', 'image/png'], ['jpg', 'image/jpeg'],
+          ['jpeg', 'image/jpeg'], ['xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']]) {
+          await input.setInputFiles({ name: `accepted.${extension}`, mimeType, buffer: evidence.buffer });
+          await editor.getByText(`Bukti dipilih: accepted.${extension}`, { exact: true }).waitFor();
+        }
+        await input.setInputFiles({ name: 'boundary.pdf', mimeType: 'application/pdf', buffer: Buffer.alloc(10 * 1024 * 1024) });
+        await editor.getByText('Bukti dipilih: boundary.pdf', { exact: true }).waitFor();
+        assert.equal(await editor.getByRole('alert').count(), 0);
+        assert.equal(await editor.getByRole('button', { name: 'Simpan', exact: true }).isEnabled(), true);
+        assert.equal(requests.length, 0, 'Even a valid boundary-size file waits for Simpan');
+        assert.deepEqual(await page.evaluate(() => window.gateway.saves), []);
+        await input.setInputFiles({ name: 'oversized.pdf', mimeType: 'application/pdf', buffer: Buffer.alloc(10 * 1024 * 1024 + 1) });
+        await editor.getByRole('alert').filter({ hasText: /10 MiB/ }).waitFor({ timeout: 5000 });
+        assert.equal(await editor.getByText('Bukti dipilih: oversized.pdf', { exact: true }).count(), 0);
+        assert.equal(requests.length, 0);
+        assert.deepEqual(await page.evaluate(() => window.gateway.saves), []);
+        await input.setInputFiles(evidence);
+        await editor.getByText(`Bukti dipilih: ${evidence.name}`, { exact: true }).waitFor();
+        assert.equal(await editor.getByRole('alert').count(), 0);
+      } finally { await page.close(); }
+    });
+
+    await t.test('DO save omits unchanged evidence and preserves the stored attachment', async () => {
+      const { page, requests } = await fixture(route => route.abort());
+      try {
+        const editor = await openDoEditor(page);
+        await editor.getByLabel('Pembilang aktual (N)', { exact: true }).fill('3');
+        await editor.getByRole('button', { name: 'Simpan', exact: true }).click();
+        await editor.waitFor({ state: 'detached' });
+        assert.deepEqual(await page.evaluate(() => window.gateway.saves), [{ indicatorId: 'do-indicator', month: 3, year: 2026,
+          data: { pencapaianRiil: 3, totalSasaran: 4, scoringVersion: 'DO_2026_V2', inputBasis: 'PERIOD_ACTUAL', notes: 'Stored source' } }]);
+        assert.equal(await page.evaluate(() => window.gateway.store.getMonthlyRecord('do-indicator', 3).evidenceId), 'stored-evidence');
+        assert.equal(requests.length, 0);
+      } finally { await page.close(); }
+    });
+
+    await t.test('DO editor downloads existing evidence through the authenticated gateway without saving', async () => {
+      const { page, requests } = await fixture((route, request) => {
+        assert.equal(request.path, '/storage/download');
+        assert.equal(new URLSearchParams(request.search).get('uploadId'), 'stored-evidence');
+        assert.equal(request.auth, 'Bearer old-access');
+        return binary(route);
+      });
+      try {
+        const editor = await openDoEditor(page);
+        assert.equal(requests.length, 0);
+        const downloaded = page.waitForEvent('download');
+        await editor.getByRole('button', { name: 'Unduh bukti dukung', exact: true }).click();
+        assert.equal((await downloaded).suggestedFilename(), 'bukti uji.pdf');
+        await page.waitForFunction(() => window.gateway.revoked.length === 1);
+        assert.equal(requests.length, 1);
+        assert.deepEqual(await page.evaluate(() => window.gateway.saves), []);
+      } finally { await page.close(); }
+    });
+
+    for (const failAt of ['content', 'finalize']) {
+      await t.test(`DO ${failAt} failure never saves and can retry the selected file`, async () => {
+        const { page, requests } = await doFixture({ failAt });
+        try {
+          const editor = await openDoEditor(page);
+          const input = editor.getByLabel('Lampirkan bukti dukung', { exact: true });
+          const save = editor.getByRole('button', { name: 'Simpan', exact: true });
+          await input.setInputFiles(evidence);
+          await save.click();
+          await editor.getByRole('alert').filter({ hasText: `${failAt} failed` }).waitFor();
+          assert.deepEqual(await page.evaluate(() => window.gateway.saves), []);
+          assert.equal(await input.isEnabled(), true);
+          assert.equal(await save.isEnabled(), true);
+          assert.equal(requests.filter(r => r.path.endsWith('/finalize')).length, failAt === 'content' ? 0 : 1);
+          await save.click();
+          await editor.waitFor({ state: 'detached' });
+          assert.equal(requests.filter(r => r.path === '/storage/uploads').length, 2);
+          assert.equal(requests.filter(r => r.path.endsWith('/content')).length, 2);
+          assert.equal(requests.at(-1).path, '/storage/uploads/do-upload-2/finalize');
+          assert.equal(await page.evaluate(() => window.gateway.saves.length), 1);
+          assert.equal(await page.evaluate(() => window.gateway.saves[0].data.evidenceId), 'do-upload-2');
+        } finally { await page.close(); }
+      });
+    }
+
+    await t.test('DO monthly save failure retries the same finalized evidence without reupload', async () => {
+      const { page, requests } = await doFixture();
+      try {
+        const editor = await openDoEditor(page);
+        await page.evaluate(() => { window.gateway.saveFailures = 1; });
+        await editor.getByLabel('Lampirkan bukti dukung', { exact: true }).setInputFiles(evidence);
+        const save = editor.getByRole('button', { name: 'Simpan', exact: true });
+        await save.click();
+        await editor.getByRole('alert').filter({ hasText: 'Monthly save failed' }).waitFor();
+        assert.equal(await save.isEnabled(), true);
+        assert.equal(requests.length, 3);
+        await save.click();
+        await editor.waitFor({ state: 'detached' });
+        const saves = await page.evaluate(() => window.gateway.saves);
+        assert.equal(saves.length, 2);
+        assert.equal(saves[0].data.evidenceId, 'do-upload-1');
+        assert.deepEqual(saves[1], saves[0]);
+        assert.equal(requests.length, 3, 'Retry must reuse the finalized upload');
+      } finally { await page.close(); }
+    });
+
+    for (const reason of ['locked', 'historicalYtd', 'unimplemented']) {
+      await t.test(`DO ${reason} disables evidence and save without mutation`, async () => {
+        const { page, requests } = await fixture(route => route.abort());
+        try {
+          const editor = await openDoEditor(page, 'do-editor', { [reason]: true });
+          assert.equal(await editor.getByLabel('Lampirkan bukti dukung', { exact: true }).isDisabled(), true);
+          assert.equal(await editor.getByRole('button', { name: 'Simpan', exact: true }).isDisabled(), true);
+          if (reason === 'historicalYtd') assert.equal(await editor.getByRole('combobox', { name: /^Basis N dan D/ }).inputValue(), 'YTD_ACTUAL');
+          if (reason === 'unimplemented') await editor.getByRole('status').filter({ hasText: 'UNRESOLVED_RULE' }).waitFor();
+          await editor.locator('form').evaluate(form => form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+          assert.deepEqual(await page.evaluate(() => window.gateway.saves), []);
+          assert.equal(requests.length, 0);
+          if (reason === 'locked') {
+            await page.evaluate(() => window.gateway.render('do-drawer', 3, { locked: true }));
+            const edit = page.getByRole('button', { name: 'Edit capaian dan bukti dukung', exact: true });
+            await edit.waitFor();
+            assert.equal(await edit.isDisabled(), true);
+          }
+        } finally { await page.close(); }
+      });
+    }
+
+    await t.test('DO scope change unmounts an uploading editor and prevents a late monthly save', async () => {
+      const { page, requests, exceptions, release } = await doFixture({ pauseAt: 'content' });
+      try {
+        const editor = await openDoEditor(page, 'do-drawer');
+        await editor.getByLabel('Lampirkan bukti dukung', { exact: true }).setInputFiles(evidence);
+        const started = page.waitForRequest('**/storage/uploads/do-upload-1/content');
+        await editor.getByRole('button', { name: 'Simpan', exact: true }).click();
+        await started;
+        await page.evaluate(() => window.gateway.render('do-drawer', 4));
+        await editor.waitFor({ state: 'detached' });
+        await page.getByText('Capaian Bulan 4', { exact: true }).waitFor();
+        release();
+        await page.waitForFunction(() => !window.gateway.store.isMutating());
+        assert.equal(requests.at(-1).path, '/storage/uploads/do-upload-1/finalize');
+        assert.deepEqual(await page.evaluate(() => window.gateway.saves), []);
+        assert.equal(await page.getByRole('dialog', { name: 'Input DO 2026', exact: true }).count(), 0);
+        assert.deepEqual(exceptions, []);
+      } finally { release(); await page.close(); }
+    });
+
+    await t.test('legacy drawer retains Realisasi fisik and Simpan Capaian behavior', async () => {
+      const { page, requests } = await fixture(route => route.abort());
+      try {
+        await page.evaluate(() => window.gateway.render('evidence'));
+        const input = page.getByRole('spinbutton', { name: 'Realisasi fisik', exact: true });
+        await input.fill('5');
+        assert.equal(await page.getByRole('button', { name: 'Edit capaian dan bukti dukung', exact: true }).count(), 0);
+        await page.getByRole('button', { name: 'Simpan Capaian', exact: true }).click();
+        await page.getByText('Data capaian bulan 1 tersimpan di server.', { exact: true }).waitFor();
+        assert.deepEqual(await page.evaluate(() => window.gateway.saves), [{ indicatorId: 'indicator', month: 1, year: 2025,
+          data: { pencapaianRiil: 5, notes: '', evidenceId: 'evidence' } }]);
+        assert.equal(requests.length, 0);
+      } finally { await page.close(); }
+    });
 
     await t.test('raw upload retries identical bytes after refresh then finalizes, without MinIO requests', async () => {
       const { page, requests } = await fixture(async (route, request) => {

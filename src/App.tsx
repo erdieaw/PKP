@@ -9,7 +9,7 @@ class AppErrorBoundary extends React.Component<{ children: React.ReactNode }, { 
   state = { failed: false };
   static getDerivedStateFromError() { return { failed: true }; }
   render() {
-    if (this.state.failed) return <div role="alert" className="min-h-screen flex flex-col items-center justify-center gap-4 bg-slate-50 text-slate-800"><p>Tampilan tidak dapat dimuat. Muat ulang untuk mencoba kembali.</p><button onClick={() => window.location.reload()} className="rounded-xl bg-emerald-600 px-4 py-2 text-white">Muat Ulang</button></div>;
+    if (this.state.failed) return <div role="alert" className="app-loading min-h-[100svh] flex flex-col items-center justify-center gap-4 text-slate-800"><p>Tampilan tidak dapat dimuat. Muat ulang untuk mencoba kembali.</p><button onClick={() => window.location.reload()} className="rounded-xl bg-emerald-600 px-4 py-2 text-white">Muat Ulang</button></div>;
     return this.props.children;
   }
 }
@@ -70,7 +70,7 @@ export function App() {
     }
   };
 
-  if (pending || error) return <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6"><div className="w-full max-w-md space-y-4 text-slate-700">{error ? <div role="alert" className="space-y-4 text-center"><p>{error}</p><div className="flex flex-wrap justify-center gap-3"><button className="px-4 py-2 rounded-xl bg-emerald-600 text-white" onClick={() => void load(currentUser ?? undefined)}>Coba Lagi</button><button className="px-4 py-2 rounded-xl border border-slate-300" onClick={() => void logout()}>Kembali ke Login</button></div></div> : <ProcessingIndicator label="Memuat sesi dan data SIPKP..." description="Menyiapkan akses dan data sesuai akun Anda. Mohon tunggu." />}</div></div>;
+  if (pending || error) return <div className="app-loading min-h-[100svh] flex items-center justify-center p-6"><div className="w-full max-w-md space-y-4 text-slate-700">{error ? <div role="alert" className="space-y-4 text-center"><p>{error}</p><div className="flex flex-wrap justify-center gap-3"><button className="px-4 py-2 rounded-xl bg-emerald-600 text-white" onClick={() => void load(currentUser ?? undefined)}>Coba Lagi</button><button className="px-4 py-2 rounded-xl border border-slate-300" onClick={() => void logout()}>Kembali ke Login</button></div></div> : <ProcessingIndicator label="Memuat sesi dan data SIPKP..." description="Menyiapkan akses dan data sesuai akun Anda. Mohon tunggu." />}</div></div>;
 
   return <AppErrorBoundary>{currentUser
     ? <AppLayout currentUser={currentUser} onLogout={() => void logout()} />
