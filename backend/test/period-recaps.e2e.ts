@@ -126,6 +126,54 @@ test('separate recaps persist and authorize through real HTTP without changing m
       await api('POST', '/workflow/submit', { year: 2026, periodNumber: 1, isQuarter: true }, session.accessToken, 409);
       assert.equal((await api<Sheet>('GET', '/analytics/sheet7?year=2026&quarter=1', undefined, session.accessToken)).indicators.find(item => item.indicatorId === recap.indicatorId)?.scoringVersion, 'DO_2026_V2');
     });
+    await t.test('annual-only profiles reject monthly and partial recap writes without changing history', async () => {
+      const before = await db.monthlyRecord.findMany({ where: { healthCenterId: center.id } });
+      for (const indicatorId of ['K1-R29', 'K2-R11', 'K3-R14', 'K4-R9', 'K5-R21']) {
+        for (const month of [3, 12]) await api('PUT', '/records/monthly', {
+          year: 2026, month, records: [{ indicatorId, pencapaianRiil: 1, totalSasaran: 100, scoringVersion: 'DO_2026_V2', inputBasis: 'PERIOD_ACTUAL' }],
+        }, a.accessToken, 400);
+        await api('PUT', '/records/period-recaps', { ...recap, indicatorId }, a.accessToken, 400);
+        await api('PUT', '/records/period-recaps', { ...recap, indicatorId, endMonth: 12, confirmed: false }, a.accessToken, 400);
+        assert.equal(await db.periodRecap.count({ where: { healthCenterId: center.id, indicatorId } }), 0);
+      }
+      assert.deepEqual(await db.monthlyRecord.findMany({ where: { healthCenterId: center.id } }), before);
+    });
+    await t.test('annual-only recaps produce measurements but no performance score or official assessment', async () => {
+      const before = await db.monthlyRecord.findMany({ where: { healthCenterId: center.id } });
+      const fixtures = [
+        ['K1-R29', 60, 100, 60, true], ['K1-R56', 3, 4, 75, false],
+        ['K2-R11', 85, 100, 85, true], ['K3-R14', 13, 100, 13, true], ['K4-R9', 9, 10, 90, true],
+        ['K5-R21', 4, 5, 80, true],
+      ] as const;
+      for (const [indicatorId, numerator, denominator] of fixtures) {
+        await api('PUT', '/records/period-recaps', { ...recap, indicatorId, endMonth: 12, numerator, denominator });
+      }
+      const annual = await view(12);
+      const partial = await view(3);
+      const sheet = await api<Sheet>('GET', '/analytics/sheet7?year=2026&quarter=4');
+      for (const [indicatorId, numerator, denominator, measurement, targetMet] of fixtures) {
+        const row = annual.items.find(item => item.indicatorId === indicatorId);
+        assert.deepEqual([row?.numerator, row?.denominator, row?.measurementValue, row?.targetMet], [numerator, denominator, measurement, targetMet]);
+        assert.deepEqual([row?.nilaiKinerja, row?.scoreComplete, row?.assessmentComplete, row?.completionScope], [null, false, false, 'ARITHMETIC_ONLY']);
+        assert.equal(partial.items.find(item => item.indicatorId === indicatorId)?.status, 'ANNUAL_RECAP_REQUIRED');
+        const reported = sheet.indicators.find(item => item.indicatorId === indicatorId);
+        assert.ok(reported && 'assessmentComplete' in reported);
+        assert.deepEqual([reported.measurementValue, reported.nilaiKinerja, reported.assessmentComplete], [measurement, null, false]);
+      }
+      assert.equal(sheet.isOfficial, false);
+      assert.equal(sheet.reportingPolicy.canSubmit, false);
+      assert.deepEqual(await db.monthlyRecord.findMany({ where: { healthCenterId: center.id } }), before);
+    });
+    await t.test('annual-only recap access and optimistic revisions still fail closed', async () => {
+      const annual = { ...recap, indicatorId: 'K1-R29', endMonth: 12, numerator: 61, denominator: 100 };
+      await api('PUT', '/records/period-recaps', annual, a.accessToken, 409);
+      await api('PUT', '/records/period-recaps', { ...annual, expectedRevision: 1 }, p.accessToken, 403);
+      await api('PUT', '/records/period-recaps', { ...annual, healthCenterId: other.id, expectedRevision: 1 }, a.accessToken, 403);
+      await api('PUT', '/records/period-recaps', { ...annual, healthCenterId: center.id, expectedRevision: 1 }, d.accessToken, 403);
+      await db.picAssignment.create({ data: { healthCenterId: center.id, year: 2026, indicatorId: annual.indicatorId, picUserId: pic.id } });
+      await api('PUT', '/records/period-recaps', { ...annual, expectedRevision: 1 }, p.accessToken);
+      assert.equal((await view(12)).items.find(item => item.indicatorId === annual.indicatorId)?.recapRevision, 2);
+    });
     await t.test('inactive and locked years reject recap writes', async () => {
       // Given
       await db.yearPeriod.upsert({ where: { year: 2027 }, create: { year: 2027 }, update: {} });

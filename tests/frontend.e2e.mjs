@@ -113,13 +113,13 @@ try {
 
   stage = 'monthly save and evidence';
   await monthly(admin, indicator);
-  await admin.getByRole('button', { name: `Edit realisasi ${code}`, exact: true }).click();
-  await admin.getByLabel(`Realisasi ${code}`, { exact: true }).fill('7');
+  await admin.getByRole('button', { name: `Edit realisasi ${code}, Januari 2026,` }).click();
+  await admin.getByLabel(`Realisasi ${code}, Januari 2026,`).fill('7');
   const monthlySaved = admin.waitForResponse(response => new URL(response.url()).pathname.endsWith('/records/monthly') && response.request().method() === 'PUT');
-  await admin.getByRole('button', { name: `Simpan realisasi ${code}`, exact: true }).click();
+  await admin.getByRole('button', { name: `Simpan realisasi ${code}, Januari 2026,` }).click();
   const monthlyWrite = await monthlySaved;
   assert.ok(monthlyWrite.ok(), 'Monthly PUT failed.');
-  await admin.getByRole('button', { name: `Simpan realisasi ${code}`, exact: true }).waitFor({ state: 'hidden' });
+  await admin.getByRole('button', { name: `Simpan realisasi ${code}, Januari 2026,` }).waitFor({ state: 'hidden' });
   authorization = await monthlyWrite.request().headerValue('authorization');
   const recordPath = `/records/monthly?year=2026&month=1&healthCenterId=${centerId}`;
   let records = items(await get(admin, recordPath, authorization));
@@ -138,7 +138,7 @@ try {
   const evidenceSaved = admin.waitForResponse(response => new URL(response.url()).pathname.endsWith('/records/monthly') && response.request().method() === 'PUT');
   await drawer.getByRole('button', { name: 'Simpan Capaian', exact: true }).click();
   assert.ok((await evidenceSaved).ok(), 'Evidence attachment PUT failed.');
-  await drawer.getByText('Data capaian bulan 1 tersimpan di server.', { exact: true }).waitFor();
+  await drawer.getByText('Data capaian Januari 2026 tersimpan di server.', { exact: true }).waitFor();
   records = items(await get(admin, recordPath, authorization));
   const record = records.find(item => item.indicatorId === indicator.id);
   assert.ok(record.evidenceId, 'Server must persist the attached evidence ID.');

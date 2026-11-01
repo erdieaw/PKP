@@ -1,9 +1,28 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { FormEvent } from 'react';
 import { pkpStore } from '../../services/apiStore';
+import { getMonthlyInputBlockReason, monthPeriodLabel } from '../../services/inputPeriod';
 import type { Do2026Profile } from '../../types/do2026';
+import { confirmDiscardChanges, useUnsavedChanges } from '../common/useUnsavedChanges';
 import type { PeriodRecapItem } from './recap-types';
 import { recapMonths } from './recap-types';
+
+export function getRecapInputBlockReason(year: number, endMonth: number, healthCenterId: string, indicatorId?: string, profile?: Do2026Profile): string | null {
+  if (!pkpStore.getSessionUser()) return 'Sesi berakhir. Silakan masuk kembali.';
+  if (pkpStore.getSelectedHealthCenterId() !== healthCenterId || pkpStore.getCurrentYear() !== year) {
+    return 'Lingkup Puskesmas atau tahun berubah. Buka kembali rekap pada periode yang dipilih.';
+  }
+  for (let month = 1; month <= endMonth; month++) {
+    const reason = getMonthlyInputBlockReason(year, month, indicatorId);
+    if (reason) return reason;
+  }
+  if (endMonth !== 12 && (profile?.annualRecapOnly ||
+    pkpStore.getIndicators().find(row => row.id === indicatorId)?.do2026?.annualRecapOnly)) {
+    return 'Profil ini hanya menerima rekap tahunan Januari sampai Desember yang dikonfirmasi. Rekap parsial tidak dapat diubah. Pilih Desember pada Akhir periode rekap untuk mengisi rekap tahunan.';
+  }
+  if (pkpStore.isMutating()) return 'Tunggu penyimpanan selesai sebelum mengubah rekap.';
+  return null;
+}
 
 interface Props {
   readonly item: PeriodRecapItem;
@@ -11,24 +30,43 @@ interface Props {
   readonly year: number;
   readonly endMonth: number;
   readonly healthCenterId: string;
-  readonly canEdit: boolean;
+  readonly readOnlyReason: string | null;
+  readonly onPendingChange: (pending: boolean) => void;
   readonly onSaved: () => void;
 }
 
-export function RecapEditor({ item, profile, year, endMonth, healthCenterId, canEdit, onSaved }: Props) {
+export function RecapEditor({ item, profile, year, endMonth, healthCenterId, readOnlyReason, onPendingChange, onSaved }: Props) {
+  useSyncExternalStore(pkpStore.subscribe, pkpStore.getSnapshot, pkpStore.getServerSnapshot);
   const [numerator, setNumerator] = useState(item.numerator?.toString() ?? '');
   const [denominator, setDenominator] = useState(item.denominator?.toString() ?? '');
   const [notes, setNotes] = useState(item.recapNotes ?? '');
   const [confirmed, setConfirmed] = useState(false);
+  const [baseline, setBaseline] = useState({ numerator, denominator, notes, confirmed });
+  const [userId] = useState(() => pkpStore.getSessionUser()?.id);
+  const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
-  const blocked = !canEdit || pending;
+  useEffect(() => {
+    onPendingChange(pending);
+    return () => onPendingChange(false);
+  }, [pending, onPendingChange]);
+  const dirty = numerator !== baseline.numerator || denominator !== baseline.denominator || notes !== baseline.notes || confirmed !== baseline.confirmed;
+  useUnsavedChanges(dirty || pending, 'recap');
+  const blockReason = getRecapInputBlockReason(year, endMonth, healthCenterId, item.indicatorId, profile) ?? readOnlyReason;
+  const blocked = Boolean(blockReason) || pending;
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (blocked || !confirmed) return;
+    if (pending || controller.current || pkpStore.isMutating()) return;
+    const user = pkpStore.getSessionUser();
+    const liveReason = getRecapInputBlockReason(year, endMonth, healthCenterId, item.indicatorId, profile);
+    if (!user || user.id !== userId || liveReason || readOnlyReason) {
+      setError(liveReason ?? readOnlyReason ?? 'Sesi pengguna berubah. Buka kembali rekap sebelum menyimpan.');
+      return;
+    }
+    if (!confirmed) return;
     const actualNumerator = Number(numerator);
     const actualDenominator = Number(denominator);
     if (!numerator.trim() || !denominator.trim() || !notes.trim() ||
@@ -36,30 +74,53 @@ export function RecapEditor({ item, profile, year, endMonth, healthCenterId, can
       setError('Isi N, D nonnegatif dan catatan sumber. Kosong bukan nol.');
       return;
     }
-    controller.current?.abort();
+    if ((profile.numeratorInput === 'INTEGER' && !Number.isInteger(actualNumerator)) ||
+      (profile.denominatorInput === 'INTEGER' && !Number.isInteger(actualDenominator))) {
+      setError('Isi bilangan bulat untuk N dan D berupa hitungan sesuai DO. Jangan membulatkan data sumber secara otomatis.');
+      return;
+    }
     const request = new AbortController();
     controller.current = request;
     setPending(true);
     setError(null);
     try {
-      if (pkpStore.getSelectedHealthCenterId() !== healthCenterId || pkpStore.getCurrentYear() !== year) return;
       await pkpStore.savePeriodRecap({
         year, endMonth, indicatorId: item.indicatorId, numerator: actualNumerator,
         denominator: actualDenominator, notes: notes.trim(), confirmed: true, expectedRevision: item.recapRevision,
       });
-      if (!request.signal.aborted) onSaved();
+      if (!request.signal.aborted) {
+        setNotes(notes.trim());
+        setBaseline({ numerator, denominator, notes: notes.trim(), confirmed });
+        onSaved();
+      }
     } catch (failure) {
       if (!request.signal.aborted) setError(failure instanceof Error ? failure.message : 'Rekap gagal disimpan. Coba kembali.');
     } finally {
-      if (!request.signal.aborted) setPending(false);
+      if (!request.signal.aborted) {
+        controller.current = null;
+        setPending(false);
+      }
     }
   }
 
-  return <details className="border-t border-slate-200 pt-4">
-    <summary className="cursor-pointer font-semibold text-emerald-800 focus-visible:outline-emerald-600">Isi atau perbarui rekap terpisah</summary>
+  return <details open={open} className="border-t border-slate-200 pt-4">
+    <summary onClick={event => {
+      event.preventDefault();
+      if (open) {
+        if (pending || controller.current || pkpStore.isMutating() || !confirmDiscardChanges('recap')) return;
+        setNumerator(baseline.numerator);
+        setDenominator(baseline.denominator);
+        setNotes(baseline.notes);
+        setConfirmed(baseline.confirmed);
+        setError(null);
+      }
+      setOpen(!open);
+    }} className="cursor-pointer font-semibold text-emerald-800 focus-visible:outline-emerald-600">Isi atau perbarui rekap terpisah</summary>
     <form onSubmit={save} className="mt-4 space-y-4">
-      <p className="text-sm text-slate-600">Simpan angka rekap Januari sampai {recapMonths[endMonth - 1]} {year}. Data bulanan tidak ditimpa. Ini bukan input untuk bulan akhir saja.</p>
-      {!canEdit && <p role="status" className="text-sm text-amber-900">Hanya admin atau PIC yang ditugaskan pada Puskesmas sendiri dapat mengisi pada tahun aktif dan periode terbuka.</p>}
+      <p className="text-sm text-slate-600">Simpan angka rekap Januari sampai {monthPeriodLabel(year, endMonth)}. Puskesmas: {pkpStore.getSelectedHealthCenter()?.name ?? healthCenterId}. Data bulanan tidak ditimpa. Ini bukan input untuk bulan akhir saja.</p>
+      {profile.annualRecapOnly && <p className="text-sm text-slate-600">Hanya rekap tahunan Januari sampai Desember yang dikonfirmasi sesuai DO. Bukan penjumlahan otomatis data bulanan; pengukuran dan ketercapaian tidak berarti skor kinerja tersedia.</p>}
+      {profile.annualRecapOnly && profile.assessmentInstruction && <p role="status" className="whitespace-pre-wrap text-sm text-amber-900">{profile.assessmentInstruction}</p>}
+      {blockReason && <p role="status" className="text-sm text-amber-900">{blockReason}</p>}
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="block text-sm font-medium">{profile.numeratorLabel || 'Pembilang aktual (N)'}
           <input type="number" min="0" step={profile.numeratorInput === 'INTEGER' ? '1' : 'any'} required disabled={blocked} value={numerator} onChange={event => setNumerator(event.target.value)}

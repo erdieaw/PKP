@@ -103,7 +103,8 @@ try {
   run('npm', ['run', 'db:seed']);
   run(process.execPath, ['scripts/init-storage.mjs']);
   run(process.execPath, ['--import', 'tsx', '--test', '--test-name-pattern=real MinIO', 'test/storage-gateway.test.ts'], { env: { ...env, TEST_STORAGE_S3: 'true' } });
-  run(process.execPath, ['--test', '--test-concurrency=1', `dist-test/test/${do2026 ? 'do2026' : 'backend'}.e2e.js`], {
+  const suites = do2026 ? ['do2026', 'period-recaps'] : ['backend'];
+  run(process.execPath, ['--test', '--test-concurrency=1', ...suites.map(suite => `dist-test/test/${suite}.e2e.js`)], {
     env: { ...env, TEST_E2E: String(!do2026), TEST_DO_E2E: String(do2026) },
   });
   console.log(`Disposable ${do2026 ? 'DO2026' : 'backend'} E2E passed against real Postgres, Redis and MinIO.`);

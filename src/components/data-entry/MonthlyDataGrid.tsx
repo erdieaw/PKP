@@ -4,6 +4,7 @@ import { PeriodRecapPanel } from './PeriodRecapPanel';
 import { ApiError } from '../../services/apiClient';
 import { epSyncStatus, lastSyncText } from '../../services/integrationStatus';
 import { indicatorDisplayCode } from '../../services/indicatorOrder';
+import { getMonthlyInputBlockReason } from '../../services/inputPeriod';
 import { OfficialIndicator, KlasterId, Sheet7OfficialSummary } from '../../types/pkp';
 import { 
   Search, 
@@ -27,6 +28,7 @@ import {
 } from 'lucide-react';
 import { PolarityBadge } from '../common/PolarityBadge';
 import { ScoreBadge } from '../common/ScoreBadge';
+import { confirmDiscardChanges, useUnsavedChanges } from '../common/useUnsavedChanges';
 import { Do2026Editor } from './Do2026Editor';
 import { measurementText } from '../../types/do2026';
 
@@ -34,7 +36,7 @@ interface MonthlyDataGridProps {
   selectedMonth: number;
   selectedKlaster: number;
   onSelectKlaster: (klasterId: number) => void;
-  onOpenDrawer: (indicator: OfficialIndicator) => void;
+  onOpenDrawer: (indicator: OfficialIndicator, inspectionQuarter?: 1 | 2 | 3 | 4) => void;
 }
 
 export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
@@ -47,10 +49,14 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
   const [selectedQuarter, setSelectedQuarter] = useState<1 | 2 | 3 | 4>(
     selectedMonth <= 3 ? 1 : selectedMonth <= 6 ? 2 : selectedMonth <= 9 ? 3 : 4
   );
+  useEffect(() => {
+    setSelectedQuarter(selectedMonth <= 3 ? 1 : selectedMonth <= 6 ? 2 : selectedMonth <= 9 ? 3 : 4);
+  }, [selectedMonth]);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [tempValue, setTempValue] = useState<string>('');
+  const [originalValue, setOriginalValue] = useState<string>('');
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
   const [toast, setToast] = useState<string | null>(null);
   const isSyncingAll = false;
@@ -64,14 +70,15 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
   const [revisionNoteInput, setRevisionNoteInput] = useState<string>('');
 
   const currentYear = pkpStore.getCurrentYear();
-  const currentUser = pkpStore.getCurrentUser();
+  const currentUser = pkpStore.getSessionUser();
   const selectedCenter = pkpStore.getSelectedHealthCenterId();
+  const centerName = pkpStore.getSelectedHealthCenter()?.name ?? 'Belum memilih Puskesmas';
   useEffect(() => {
     setEditingId(null);
     setTempValue('');
     setError(null);
-  }, [currentYear, selectedMonth, selectedKlaster, periodViewMode, selectedCenter]);
-  const isDinkes = currentUser.role === 'DINKES_ADMIN';
+  }, [currentYear, selectedMonth, selectedQuarter, selectedKlaster, periodViewMode, selectedCenter]);
+  const isDinkes = currentUser?.role === 'DINKES_ADMIN';
 
   const isQuarterMode = periodViewMode === 'QUARTERLY';
   const activePeriodNum = isQuarterMode ? selectedQuarter : selectedMonth;
@@ -80,6 +87,8 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
 
   const indicators = pkpStore.getIndicators();
   const annualTargets = pkpStore.getAnnualTargets();
+  useUnsavedChanges(Boolean(editingId && indicators.some(ind => ind.id === editingId && !ind.do2026) && tempValue !== originalValue), 'monthly-grid');
+  const monthlyBlockReason = getMonthlyInputBlockReason(currentYear, selectedMonth);
   let quarterRows: Sheet7OfficialSummary['rows'] | undefined;
   try { quarterRows = pkpStore.getOfficialSheet7Data(selectedQuarter).rows; } catch { /* Scope is loading. */ }
 
@@ -129,14 +138,27 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
     }
   });
 
+  const discardEditing = () => {
+    if (pending || !confirmDiscardChanges('monthly-grid')) return false;
+    setEditingId(null);
+    setTempValue('');
+    setError(null);
+    return true;
+  };
+
   const toggleSection = (sectionCode: string) => {
+    if (!collapsedSections[sectionCode] && indicators.some(ind => ind.id === editingId && ind.sectionCode === sectionCode) && !discardEditing()) return;
     setCollapsedSections(prev => ({ ...prev, [sectionCode]: !prev[sectionCode] }));
   };
 
   const isLocked = !pkpStore.isActiveYear(currentYear) || pkpStore.isPeriodLocked(currentYear, activePeriodNum, isQuarterMode);
   const canManageWorkflow = isDinkes && pkpStore.isActiveYear(currentYear) && !pkpStore.getLoadState().loading;
-  const canEdit = (id: string) => pkpStore.canInputOwnPeriod(currentYear) && !pkpStore.getLoadState().loading && !isQuarterMode && !pkpStore.isPeriodLocked(currentYear, selectedMonth) &&
-    (currentUser.role === 'ADMIN_PUSKESMAS' || (currentUser.role === 'PIC' && pkpStore.getAssignments()[id] === currentUser.id));
+  const canEdit = (id: string) => !isQuarterMode && getMonthlyInputBlockReason(currentYear, selectedMonth, id) === null;
+
+  const handleOpenDrawer = (indicator: OfficialIndicator) => {
+    if (!discardEditing()) return;
+    onOpenDrawer(indicator, isQuarterMode ? selectedQuarter : undefined);
+  };
 
   // Realisasi Edit Handlers
   const handleStartEdit = (ind: OfficialIndicator, currentVal: number | null) => {
@@ -149,8 +171,10 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
       showToast('Hasil triwulan mengikuti versi dan basis data tersimpan. Beralih ke Mode Bulanan untuk menginput capaian riil.');
       return;
     }
+    if (!discardEditing()) return;
     setEditingId(ind.id);
     setTempValue(currentVal?.toString() ?? '');
+    setOriginalValue(currentVal?.toString() ?? '');
   };
 
   const handleCommitEdit = async (ind: OfficialIndicator) => {
@@ -167,7 +191,9 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
     if (e.key === 'Enter') {
       handleCommitEdit(ind);
     } else if (e.key === 'Escape') {
-      setEditingId(null);
+      e.preventDefault();
+      e.stopPropagation();
+      discardEditing();
     }
   };
 
@@ -194,7 +220,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
       isHead: true,
       childIds: sec.items.map(i => i.id)
     };
-    onOpenDrawer(headIndicator);
+    handleOpenDrawer(headIndicator);
   };
 
   const handleSyncAll = () => setError('Integrasi SIPKP Provinsi belum tersedia.');
@@ -214,7 +240,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
     finally { setPending(false); }
   };
   const handleSubmitToDinkes = async () => {
-    if (currentUser.role !== 'ADMIN_PUSKESMAS' || isLocked) return;
+    if (currentUser?.role !== 'ADMIN_PUSKESMAS' || isLocked) return;
     if (!await runWorkflow(() => pkpStore.submitPeriod(currentYear, activePeriodNum, isQuarterMode))) return;
     setShowSubmitModal(false);
     showToast(`Laporan ${isQuarterMode ? `Triwulan ${selectedQuarter}` : `Bulan ke-${selectedMonth}`} diajukan ke Dinkes & dikunci.`);
@@ -242,10 +268,24 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
   };
 
   const monthsName = ['', 'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+  const periodLabel = isQuarterMode
+    ? `Januari - ${monthsName[selectedQuarter * 3]} ${currentYear}`
+    : `${monthsName[selectedMonth]} ${currentYear}`;
 
   return (
     <div className="space-y-4">
-      <PeriodRecapPanel key={`${currentYear}:${selectedCenter}`} year={currentYear} month={selectedMonth} />
+      <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-950">
+        <p className="text-xs font-semibold">{isQuarterMode ? 'Konteks tinjauan triwulan (hanya baca)' : 'Konteks input bulanan'}</p>
+        <p className="mt-1 text-sm font-bold break-words">{centerName} / {periodLabel}</p>
+        <p className="mt-1 text-xs">
+          {isQuarterMode
+            ? `Triwulan ${selectedQuarter} menampilkan hasil kumulatif Januari sampai akhir ${monthsName[selectedQuarter * 3]}, bukan input tiga bulan terpisah. Rincian hanya baca; input bulanan tersedia di Mode Bulanan.`
+            : monthlyBlockReason
+              ? monthlyBlockReason
+              : 'Input pada tabel ini disimpan untuk bulan dan Puskesmas tersebut. Rekap kumulatif memakai panel terpisah.'}
+        </p>
+      </div>
+      <PeriodRecapPanel key={`${currentYear}:${selectedCenter}:${selectedMonth}`} year={currentYear} month={selectedMonth} />
       <p className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">DO 2026 masih provisional: skor yang tersedia berasal dari rubrik sumber; kategori dan rekap resmi belum disahkan. Tampilan bulanan dapat memuat observasi YTD berlabel kumulatif, bukan capaian bulan mandiri.</p>
       {editingId && !isQuarterMode && indicators.filter(ind => ind.id === editingId && ind.do2026).map(ind => (
         <Do2026Editor key={`${ind.id}:${currentYear}:${selectedMonth}:${selectedCenter}`}
@@ -270,9 +310,9 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
             <FileSpreadsheet className="w-5 h-5" />
           </div>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-base font-bold text-slate-800">
-                {isQuarterMode ? `Tinjauan Capaian Triwulan ${selectedQuarter}` : `Input & Capaian Bulan ${monthsName[selectedMonth]}`}
+                {isQuarterMode ? `Tinjauan Capaian Triwulan ${selectedQuarter} (Hanya baca)` : `Input & Capaian Bulan ${periodLabel}`}
               </h2>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-bold border border-slate-200">
                 Tahun {currentYear}
@@ -280,7 +320,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
             </div>
             <p className="text-xs text-slate-500">
               {isQuarterMode 
-                ? 'Mode Triwulanan: Hasil backend mengikuti versi dan basis data. YTD tidak dijumlahkan antarbulan.'
+                ? `Kumulatif ${periodLabel}. Hasil backend mengikuti versi dan basis data; YTD tidak dijumlahkan antarbulan.`
                 : 'Mode Bulanan: DO 2026 memakai N/D aktual dan basis periode; data V1 tetap kompatibilitas historis.'}
             </p>
           </div>
@@ -291,7 +331,8 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
           {/* Toggle Button Group: Bulanan vs Triwulanan */}
           <div className="flex p-1 bg-slate-100 rounded-xl border border-slate-200 text-xs font-semibold">
             <button
-              onClick={() => setPeriodViewMode('MONTHLY')}
+              onClick={() => { if (periodViewMode !== 'MONTHLY' && discardEditing()) setPeriodViewMode('MONTHLY'); }}
+              aria-pressed={!isQuarterMode}
               className={`px-3 py-1.5 rounded-lg transition-all ${
                 periodViewMode === 'MONTHLY'
                   ? 'bg-white text-emerald-700 shadow-sm font-bold'
@@ -301,7 +342,8 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
               Mode Bulanan
             </button>
             <button
-              onClick={() => setPeriodViewMode('QUARTERLY')}
+              onClick={() => { if (periodViewMode !== 'QUARTERLY' && discardEditing()) setPeriodViewMode('QUARTERLY'); }}
+              aria-pressed={isQuarterMode}
               className={`px-3 py-1.5 rounded-lg transition-all ${
                 periodViewMode === 'QUARTERLY'
                   ? 'bg-emerald-600 text-white shadow-sm font-bold'
@@ -318,7 +360,9 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
               {[1, 2, 3, 4].map((q) => (
                 <button
                   key={q}
-                  onClick={() => setSelectedQuarter(q as 1 | 2 | 3 | 4)}
+                  onClick={() => { if (selectedQuarter !== q && discardEditing()) setSelectedQuarter(q as 1 | 2 | 3 | 4); }}
+                  aria-pressed={selectedQuarter === q}
+                  aria-label={`Triwulan ${q}: Januari - ${monthsName[q * 3]} ${currentYear}, hanya baca`}
                   className={`px-2.5 py-1 rounded-lg transition-all ${
                     selectedQuarter === q
                       ? 'bg-white text-emerald-700 shadow-xs font-bold'
@@ -436,7 +480,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
             </div>
           </div>
 
-          {currentUser.role === 'ADMIN_PUSKESMAS' && !isLocked && (
+          {currentUser?.role === 'ADMIN_PUSKESMAS' && !isLocked && (
             <button
               onClick={() => setShowSubmitModal(true)}
               disabled={!reportingPolicy?.canSubmit}
@@ -449,7 +493,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
         </div>
       )}
 
-      {lockState.status === 'DRAFT' && currentUser.role === 'ADMIN_PUSKESMAS' && !isLocked && (
+      {lockState.status === 'DRAFT' && currentUser?.role === 'ADMIN_PUSKESMAS' && !isLocked && (
         <div className="p-3.5 rounded-xl bg-slate-100 border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-slate-800">
           <div className="flex items-center gap-2 text-xs text-slate-600">
             <Lock className="w-4 h-4 text-slate-400" />
@@ -523,7 +567,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
           ].map((k) => (
             <button
               key={k.id}
-              onClick={() => onSelectKlaster(k.id)}
+              onClick={() => { if (selectedKlaster !== k.id && discardEditing()) onSelectKlaster(k.id); }}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
                 selectedKlaster === k.id
                   ? 'bg-slate-900 text-white shadow-sm'
@@ -536,13 +580,14 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
         </div>
 
         {/* Search Field */}
-        <div className="relative min-w-[280px]">
+        <div className="relative w-full md:w-72">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
+            aria-label="Cari kode, indikator, atau sub-klaster"
             placeholder="Cari kode, indikator, atau sub-klaster..."
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => { if (discardEditing()) setSearchQuery(e.target.value); }}
             className="w-full pl-9 pr-4 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-colors"
           />
         </div>
@@ -554,7 +599,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
           <div className="flex items-center gap-2 text-slate-700 font-semibold">
             <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
             <span>
-              Menampilkan {filtered.length} Elemen Penilaian ({isQuarterMode ? `Periode Triwulan ${selectedQuarter}` : `Bulan ke-${selectedMonth}`})
+              Menampilkan {filtered.length} Elemen Penilaian ({isQuarterMode ? `Triwulan ${selectedQuarter}, kumulatif ${periodLabel}, hanya baca` : periodLabel})
             </span>
           </div>
           <div className="flex items-center gap-3 text-[11px] text-slate-500">
@@ -564,7 +609,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
             </span>
             <span className="hidden md:inline">•</span>
             <span className="hidden md:inline text-emerald-700 font-medium">
-              {isQuarterMode ? 'Kumulatif YTD Januari - Akhir Triwulan' : 'Child Elemen: Input Numerator Realisasi'}
+              {isQuarterMode ? 'Kumulatif YTD Januari - Akhir Triwulan' : monthlyBlockReason ? 'Child Elemen: Hanya baca' : 'Child Elemen: Input Numerator Realisasi'}
             </span>
           </div>
         </div>
@@ -686,6 +731,9 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
                       const pic = pkpStore.getPicForIndicator(ind.id);
                       const isEditing = editingId === ind.id && canEdit(ind.id);
                       const officialCode = indicatorDisplayCode(ind);
+                      const inputBlockReason = isQuarterMode
+                        ? `Tinjauan kumulatif ${periodLabel} hanya baca. Beralih ke Mode Bulanan untuk menginput.`
+                        : getMonthlyInputBlockReason(currentYear, selectedMonth, ind.id);
 
                       return (
                         <tr 
@@ -701,8 +749,8 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
                           <td className="py-2 px-3 align-middle border-r border-slate-200">
                             <div 
                               role="button" tabIndex={0} aria-label={`Rincian indikator ${officialCode}`}
-                              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenDrawer(ind); } }}
-                              onClick={() => onOpenDrawer(ind)}
+                              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleOpenDrawer(ind); } }}
+                              onClick={() => handleOpenDrawer(ind)}
                               className="cursor-pointer"
                               title="Klik untuk membuka drawer rincian & bukti dukung"
                             >
@@ -744,7 +792,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
                           {/* REALISASI CELL */}
                           <td 
                             role="button" tabIndex={canEdit(ind.id) ? 0 : -1} aria-disabled={!canEdit(ind.id) || pending}
-                            aria-label={`Edit realisasi ${officialCode}`}
+                            aria-label={`${inputBlockReason ? 'Realisasi' : 'Edit realisasi'} ${officialCode}, ${periodLabel}, ${centerName}${inputBlockReason ? `, hanya baca: ${inputBlockReason}` : ''}`}
                             onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); handleStartEdit(ind, rec.pencapaianRiil); } }}
                             onClick={() => handleStartEdit(ind, rec.pencapaianRiil)}
                             className={`py-2 px-3 text-right align-middle border-r border-slate-200 transition-colors ${
@@ -754,18 +802,12 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
                                 ? 'bg-sky-50/50 cursor-pointer' 
                                 : 'bg-emerald-50/60 hover:bg-emerald-100/70 cursor-pointer'
                             }`}
-                            title={
-                              isLocked 
-                                ? `Terkunci (${lockState.status})` 
-                                : isQuarterMode 
-                                ? 'Hasil triwulan sesuai versi dan basis data. Beralih ke Mode Bulanan untuk mengedit.'
-                                : 'Klik untuk edit nilai'
-                            }
+                            title={inputBlockReason ?? `Klik untuk edit nilai ${monthsName[selectedMonth]} ${currentYear}`}
                           >
                             {isEditing && !ind.do2026 ? (
                               <div className="flex items-center justify-end gap-1">
                                 <input
-                                  aria-label={`Realisasi ${officialCode}`}
+                                  aria-label={`Realisasi ${officialCode}, ${periodLabel}, ${centerName}`}
                                   disabled={pending}
                                   type="number"
                                   value={tempValue}
@@ -775,11 +817,11 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
                                   autoFocus
                                 />
                                 <button
-                                  aria-label={`Simpan realisasi ${officialCode}`}
+                                  aria-label={`Simpan realisasi ${officialCode}, ${periodLabel}, ${centerName}`}
                                   disabled={pending}
                                   onClick={() => handleCommitEdit(ind)}
                                   className="p-1 bg-emerald-600 text-white rounded hover:bg-emerald-700"
-                                  title="Simpan"
+                                  title={`Simpan untuk ${periodLabel} / ${centerName}`}
                                 >
                                   <Check className="w-3 h-3" />
                                 </button>
@@ -795,6 +837,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
                                 </span>
                               </div>
                             )}
+                            {inputBlockReason && <p className="mt-1 text-[10px] font-normal text-slate-600">{isQuarterMode || monthlyBlockReason ? 'Hanya baca' : inputBlockReason}</p>}
                           </td>
 
                           {/* Capaian Riil % */}
@@ -857,7 +900,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
               </button>
               <button
                 onClick={handleSubmitToDinkes}
-                disabled={pending || isLocked || currentUser.role !== 'ADMIN_PUSKESMAS'}
+                disabled={pending || isLocked || currentUser?.role !== 'ADMIN_PUSKESMAS'}
                 className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm transition-all"
               >
                 Ya, Ajukan & Kunci Data

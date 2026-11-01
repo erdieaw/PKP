@@ -10,6 +10,8 @@ import {
 import { ScoreBadge } from '../common/ScoreBadge';
 import { PolarityBadge } from '../common/PolarityBadge';
 import { OfficialIndicator } from '../../types/pkp';
+import { measurementText } from '../../types/do2026';
+import { PeriodRecapPanel } from '../data-entry/PeriodRecapPanel';
 
 interface PicDashboardProps {
   selectedMonth: number;
@@ -21,6 +23,18 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
   const currentUser = pkpStore.getCurrentUser();
   const currentYear = pkpStore.getCurrentYear();
   const load = pkpStore.getLoadState();
+  const healthCenter = pkpStore.getSelectedHealthCenter();
+  const month = new Intl.DateTimeFormat('id-ID', { month: 'long' }).format(new Date(currentYear, selectedMonth - 1, 1));
+  const periodLabel = `${month} ${currentYear}`;
+  const periodLocked = pkpStore.isPeriodLocked(currentYear, selectedMonth);
+  const readOnlyReasons = [
+    currentUser.role === 'DINKES_ADMIN' ? 'Akun Dinkes hanya dapat membaca capaian.' : null,
+    !pkpStore.isActiveYear(currentYear) ? `Tahun ${currentYear} tidak aktif; data historis hanya dapat dibaca.` : null,
+    periodLocked ? `Periode ${periodLabel} dikunci; isian tidak dapat diubah.` : null,
+    currentUser.role !== 'DINKES_ADMIN' && pkpStore.isActiveYear(currentYear) && !pkpStore.canInputOwnPeriod(currentYear)
+      ? 'Input hanya tersedia untuk Puskesmas sendiri yang dipilih.' : null,
+  ].filter(Boolean);
+  const readOnlyNotice = readOnlyReasons.length > 0 && <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">Hanya baca. {readOnlyReasons.join(' ')}</p>;
   const [selectedPicId, setSelectedPicId] = useState<string>('all');
   const [editingIndicatorId, setEditingIndicatorId] = useState<string | null>(null);
   const [inputVal, setInputVal] = useState<string>('');
@@ -33,7 +47,7 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
   const indicators = pkpStore.getIndicators();
   const assignments = pkpStore.getAssignments();
   const picId = currentUser.role === 'PIC' ? currentUser.id : pics.some(p => p.id === selectedPicId) ? selectedPicId : 'all';
-  const canEdit = (id: string) => pkpStore.canInputOwnPeriod(currentYear) && currentUser.role === 'PIC' && assignments[id] === currentUser.id && !pkpStore.isPeriodLocked(currentYear, selectedMonth) && !load.loading && !load.error;
+  const canEdit = (id: string) => pkpStore.canInputOwnPeriod(currentYear) && currentUser.role === 'PIC' && assignments[id] === currentUser.id && !periodLocked && !load.loading && !load.error;
   useEffect(() => { setEditingIndicatorId(null); setError(null); }, [selectedMonth, currentYear, picId]);
 
   // Filter indicators by PIC
@@ -47,12 +61,19 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
     const rec = pkpStore.getMonthlyRecord(ind.id, selectedMonth);
     const assignedPic = pkpStore.getPicForIndicator(ind.id);
     const annualTarget = pkpStore.getAnnualTargets()[ind.id];
+    const isV2 = rec.scoringVersion === 'DO_2026_V2';
+    const isYtd = rec.inputBasis === 'YTD_ACTUAL';
     return {
       indicator: ind,
       record: rec,
       pic: assignedPic,
       annualTarget,
-      monthlyTarget: typeof annualTarget?.targetSasaran === 'number' && Number.isFinite(annualTarget.targetSasaran) ? annualTarget.targetSasaran / 12 : null
+      isV2,
+      isYtd,
+      basisLabel: isYtd ? `Histori kumulatif Januari sampai ${periodLabel} (YTD_ACTUAL). Hanya baca; koreksi melalui rekap terpisah.`
+        : isV2 ? rec.inputBasis === 'PERIOD_ACTUAL' ? `Aktual ${periodLabel} saja (PERIOD_ACTUAL), bukan kumulatif.` : 'Basis observasi belum tersedia.'
+        : `V1: realisasi ${periodLabel}; target prorata tahunan / 12.`,
+      monthlyTarget: !isV2 && typeof annualTarget?.targetSasaran === 'number' && Number.isFinite(annualTarget.targetSasaran) ? annualTarget.targetSasaran / 12 : null
     };
   });
 
@@ -94,28 +115,29 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
   const generateWaReminder = () => {
     if (!activePic) return '#';
     const text = encodeURIComponent(
-      `Halo ${activePic.name}, mohon melengkapi data capaian fisik untuk Bulan ke-${selectedMonth} sesuai batas waktu pelaporan. Terima kasih.`
+      `Halo ${activePic.name}, mohon melengkapi data capaian fisik ${periodLabel} untuk ${healthCenter?.name ?? 'Puskesmas yang dipilih'} sesuai batas waktu pelaporan. Terima kasih.`
     );
     return `https://wa.me/${activePic.phone}?text=${text}`;
   };
 
   if (currentUser.role === 'PIC') {
-    const locked = !pkpStore.canInputOwnPeriod(currentYear) || pkpStore.isPeriodLocked(currentYear, selectedMonth);
+    const locked = !pkpStore.canInputOwnPeriod(currentYear) || periodLocked;
     const visibleItems = itemsWithRecord.filter(({ record }) => {
       const filled = !record.isMissing && typeof record.pencapaianRiil === 'number' && Number.isFinite(record.pencapaianRiil);
       return inputFilter === 'all' || (inputFilter === 'filled' ? filled : !filled);
     });
-    const month = new Intl.DateTimeFormat('id-ID', { month: 'long' }).format(new Date(currentYear, selectedMonth - 1, 1));
     return (
       <div className="max-w-4xl space-y-6">
         <header>
-          <p className="text-sm text-slate-500">{month} {currentYear}</p>
+          <p className="text-sm font-medium text-emerald-800">Periode data: {periodLabel}</p>
+          <p className="mt-1 break-words text-sm text-slate-600">Puskesmas: {healthCenter?.name ?? 'Belum dipilih'}</p>
           <h1 className="mt-1 text-2xl font-bold text-slate-900">Indikator Saya</h1>
-          <p className="mt-2 text-sm text-slate-600">Isi realisasi indikator yang ditugaskan kepada Anda. Pilih indikator untuk menambahkan catatan dan bukti.</p>
+          <p className="mt-2 text-sm text-slate-600">Isi realisasi bulan terpilih, bukan kumulatif. Pilih indikator untuk catatan dan bukti; gunakan rekap terpisah untuk Januari sampai akhir periode.</p>
         </header>
         {load.error && <p role="alert" className="rounded-lg bg-rose-50 p-4 text-sm text-rose-800">{load.error.message}</p>}
         {load.loading && <p role="status" className="text-sm text-slate-600">Memuat indikator Anda...</p>}
-        {locked && <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">Periode ini dikunci. Anda dapat melihat data, tetapi tidak dapat mengubahnya.</p>}
+        {readOnlyNotice}
+        <PeriodRecapPanel key={`${healthCenter?.id}:${currentYear}:${selectedMonth}`} year={currentYear} month={selectedMonth} />
         <div className="flex flex-wrap gap-2" role="group" aria-label="Filter status pengisian">
           {([
             ['all', 'Semua', totalAssigned],
@@ -129,7 +151,7 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
         </div>
         {!load.loading && !load.error && !visibleItems.length && <p className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-600">{totalAssigned === 0 ? 'Belum ada indikator yang ditugaskan kepada Anda. Hubungi Admin Puskesmas untuk penugasan.' : 'Tidak ada indikator dengan status ini. Pilih filter lain untuk melihat indikator Anda.'}</p>}
         <ul className="divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white">
-          {visibleItems.map(({ indicator, record, monthlyTarget }) => {
+          {visibleItems.map(({ indicator, record, monthlyTarget, isV2, isYtd, basisLabel }) => {
             const filled = !record.isMissing && typeof record.pencapaianRiil === 'number' && Number.isFinite(record.pencapaianRiil);
             return (
               <li key={indicator.id} className="p-4 sm:p-5" data-indicator-id={indicator.id}>
@@ -139,12 +161,15 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
                 </div>
                 <h2 className="mt-2 break-words text-base font-semibold text-slate-900">{indicator.indikator}</h2>
                 <p className="mt-1 break-words text-sm text-slate-500">{indicator.kegiatan}</p>
+                <p className={`mt-2 text-sm ${isYtd ? 'text-amber-900' : 'text-slate-600'}`}>{basisLabel}</p>
                 <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
                   <dl className="flex flex-wrap gap-x-8 gap-y-3 text-sm">
-                    <div><dt className="text-slate-500">Target sasaran / bulan</dt><dd className="mt-1 font-medium text-slate-800">{monthlyTarget === null ? 'Belum ditetapkan' : `${monthlyTarget.toLocaleString('id-ID', { maximumFractionDigits: 1 })} ${indicator.satuan}`}</dd></div>
-                    <div><dt className="text-slate-500">Realisasi</dt><dd className="mt-1 font-semibold text-slate-900">{filled ? `${record.pencapaianRiil!.toLocaleString('id-ID')} ${indicator.satuan}` : 'Belum diisi'}</dd></div>
+                    <div><dt className="text-slate-500">{isV2 ? 'Penyebut aktual (D)' : 'Target prorata / bulan (V1)'}</dt><dd className="mt-1 font-medium text-slate-800">{isV2 ? record.totalSasaran?.toLocaleString('id-ID') ?? 'Belum diisi' : monthlyTarget === null ? 'Belum ditetapkan' : `${monthlyTarget.toLocaleString('id-ID', { maximumFractionDigits: 1 })} ${indicator.satuan}`}
+                      {isV2 && <span className="mt-1 block text-xs font-normal text-slate-500">{indicator.do2026?.denominatorLabel}{record.effectiveDenominator != null && record.effectiveDenominator !== record.totalSasaran && `; D efektif: ${record.effectiveDenominator.toLocaleString('id-ID')}`}</span>}</dd>
+                    </div>
+                    <div><dt className="text-slate-500">{isV2 ? 'Realisasi (N)' : 'Realisasi'}</dt><dd className="mt-1 font-semibold text-slate-900">{filled ? `${record.pencapaianRiil!.toLocaleString('id-ID')}${isV2 ? '' : ` ${indicator.satuan}`}` : 'Belum diisi'}</dd></div>
                   </dl>
-                  <button onClick={() => onOpenDrawer(indicator)} disabled={load.loading || !!load.error} className="min-h-11 shrink-0 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-50">{locked ? 'Lihat indikator' : filled ? 'Ubah isian' : 'Isi indikator'}</button>
+                  <button onClick={() => onOpenDrawer(indicator)} disabled={load.loading || !!load.error} className="min-h-11 shrink-0 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-50">{locked || isYtd ? 'Lihat indikator' : filled ? 'Ubah isian' : 'Isi indikator'}</button>
                 </div>
               </li>
             );
@@ -166,23 +191,26 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
             <span>Monitoring Kepatuhan & Realisasi per PIC</span>
           </div>
           <h2 className="text-xl font-bold text-slate-800">
-            Dashboard Penanggung Jawab (PIC) — Bulan {selectedMonth}
+            Dashboard Penanggung Jawab (PIC)
           </h2>
+          <p className="mt-1 text-sm font-medium text-emerald-800">Periode data: {periodLabel}</p>
+          <p className="mt-1 break-words text-sm text-slate-600">Puskesmas: {healthCenter?.name ?? 'Belum dipilih'}</p>
           <p className="text-xs text-slate-500">
             Pantau beban kerja, progress entri bulanan, dan capaian target untuk setiap staf pengelola program.
           </p>
         </div>
 
         {/* PIC Dropdown Filter */}
-        <div className="flex items-center gap-3">
-          <label className="text-xs font-semibold text-slate-600 whitespace-nowrap">
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
+          <label htmlFor="dashboard-pic-filter" className="text-xs font-semibold text-slate-600 whitespace-nowrap">
             Pilih PIC:
           </label>
           <select
+            id="dashboard-pic-filter"
             value={picId}
             disabled={pending}
             onChange={(e) => setSelectedPicId(e.target.value)}
-            className="text-xs font-bold text-slate-800 bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-emerald-500 cursor-pointer min-w-[220px]"
+            className="min-h-11 w-full min-w-0 text-xs font-bold text-slate-800 bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-emerald-500 cursor-pointer sm:w-auto"
           >
             <option value="all">Semua Penanggung Jawab ({pics.length} PIC)</option>
             {pics.map(p => (
@@ -206,6 +234,7 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
           )}
         </div>
       </div>
+      {readOnlyNotice}
 
       {/* KPI Cards Row */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
@@ -282,9 +311,9 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
                 <th className="py-2.5 px-3 w-16">Kode</th>
                 <th className="py-2.5 px-3 min-w-[200px]">Kegiatan & Indikator Kinerja</th>
                 <th className="py-2.5 px-3 w-32">Target & Polaritas</th>
-                <th className="py-2.5 px-3 w-28 text-right">Target Sasaran (Bln)</th>
-                <th className="py-2.5 px-3 w-32 text-right">Realisasi (Bln Ini)</th>
-                <th className="py-2.5 px-3 w-24 text-right">Capaian %</th>
+                <th className="py-2.5 px-3 w-28 text-right">Penyebut / Target</th>
+                <th className="py-2.5 px-3 w-32 text-right">Realisasi sesuai basis</th>
+                <th className="py-2.5 px-3 w-24 text-right">Pengukuran</th>
                 <th className="py-2.5 px-3 w-28 text-center">Nilai Kinerja</th>
                 <th className="py-2.5 px-3 w-32 text-center">Sinkron Provinsi</th>
                 <th className="py-2.5 px-3 w-24 text-center">Aksi</th>
@@ -292,11 +321,11 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
             </thead>
             <tbody className="divide-y divide-slate-100">
               {!itemsWithRecord.length && <tr><td colSpan={9} className="p-6 text-center text-slate-500">Tidak ada indikator yang ditugaskan untuk pilihan PIC ini.</td></tr>}
-              {itemsWithRecord.map(({ indicator, record, monthlyTarget }) => {
+              {itemsWithRecord.map(({ indicator, record, monthlyTarget, isV2, basisLabel }) => {
                 const isEditing = editingIndicatorId === indicator.id && canEdit(indicator.id);
 
                 return (
-                  <tr key={indicator.id} className="hover:bg-slate-50/80 transition-colors">
+                  <tr key={indicator.id} className="hover:bg-slate-50/80 transition-colors" data-indicator-id={indicator.id}>
                     {/* Official Provincial Code */}
                     <td className="py-2.5 px-3 font-mono font-bold text-slate-700 align-top">
                       <span className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200">
@@ -312,6 +341,7 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
                       <p className="text-[11px] text-slate-500 mt-0.5">
                         {indicator.kegiatan} • <span className="font-mono text-slate-400">{indicator.section}</span>
                       </p>
+                      <p className="mt-2 text-[11px] text-slate-600">{basisLabel}</p>
                       {record.notes && (
                         <p className="text-[11px] text-amber-700 bg-amber-50 rounded px-2 py-0.5 mt-1 border border-amber-200/60 inline-flex items-center gap-1">
                           <MessageSquare className="w-3 h-3 text-amber-600" />
@@ -323,10 +353,10 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
                     {/* Target & Polarity */}
                     <td className="py-2.5 px-3 align-top">
                       <div className="space-y-1">
-                        <PolarityBadge 
+                        {isV2 ? <span className="text-[11px] font-medium text-slate-700">{indicator.do2026?.targetDisplay ?? 'Target sesuai DO'} (V2)</span> : <PolarityBadge
                           polarity={indicator.polarity} 
                           targetDisplay={indicator.targetDisplay} 
-                        />
+                        />}
                         <span className="block text-[10px] text-slate-400">
                           Satuan: {indicator.satuan}
                         </span>
@@ -335,7 +365,9 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
 
                     {/* Monthly Target Sasaran */}
                     <td className="py-2.5 px-3 text-right font-mono text-slate-600 align-top">
-                      {monthlyTarget === null ? '-' : monthlyTarget.toFixed(1)}
+                      {isV2 ? record.totalSasaran?.toLocaleString('id-ID') ?? 'Belum diisi' : monthlyTarget === null ? '-' : monthlyTarget.toFixed(1)}
+                      <p className="mt-1 font-sans text-[10px] text-slate-500">{isV2 ? 'Penyebut aktual (D)' : 'Prorata tahunan / 12 (V1)'}</p>
+                      {isV2 && <p className="mt-1 font-sans text-[10px] text-slate-500">{indicator.do2026?.denominatorLabel}{record.effectiveDenominator != null && record.effectiveDenominator !== record.totalSasaran && `; D efektif: ${record.effectiveDenominator.toLocaleString('id-ID')}`}</p>}
                     </td>
 
                     {/* Realization input */}
@@ -362,21 +394,21 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
                       ) : (
                         <div className="font-mono font-bold text-slate-900">
                           {record.pencapaianRiil ?? '-'}
-                          <span className="text-[10px] text-slate-400 font-sans ml-1">
+                          {!isV2 && <span className="text-[10px] text-slate-400 font-sans ml-1">
                             {indicator.satuan}
-                          </span>
+                          </span>}
                         </div>
                       )}
                     </td>
 
                     {/* Realization % */}
                     <td className="py-2.5 px-3 text-right font-mono text-slate-700 align-top">
-                      {record.capaianRiilPct == null ? '-' : `${record.capaianRiilPct}%`}
+                      {isV2 ? measurementText(record.measurementValue, record.measurementUnit) : record.capaianRiilPct == null ? '-' : `${record.capaianRiilPct}%`}
                     </td>
 
                     {/* Final Score */}
                     <td className="py-2.5 px-3 text-center align-top">
-                      <ScoreBadge score={record.nilaiKinerja} size="sm" />
+                      {isV2 ? <span className="text-slate-700">{measurementText(record.nilaiKinerja, 'SCORE')}<span className="mt-1 block text-[10px] text-slate-500">V2 provisional</span></span> : <ScoreBadge score={record.nilaiKinerja} size="sm" />}
                     </td>
 
                     {/* Status Sinkronisasi Provinsi */}
@@ -406,12 +438,11 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
                         </div>
                       ) : (
                         <button
-                          onClick={() => handleStartEdit(indicator.id, record.pencapaianRiil, record.notes)}
-                          disabled={pending || !canEdit(indicator.id)}
-                          title={!canEdit(indicator.id) ? 'Hanya PIC yang ditugaskan pada periode terbuka dapat mengubah data.' : undefined}
+                          onClick={() => onOpenDrawer(indicator)}
+                          disabled={pending || load.loading || !!load.error}
                           className="px-2.5 py-1 bg-slate-100 hover:bg-emerald-50 text-slate-600 hover:text-emerald-700 border border-slate-200 rounded text-[11px] font-semibold transition-colors"
                         >
-                          Input/Ubah
+                          Lihat indikator
                         </button>
                       )}
                     </td>

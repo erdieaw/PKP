@@ -29,7 +29,9 @@ const root = createRoot(document.getElementById('root'));
 const render = (view, month = 1, options = {}) => {
   let selectedIndicator = doIndicator, record = doRecord;
   if (view.startsWith('do-')) {
-    if (options.unimplemented) selectedIndicator = { ...doIndicator, do2026: { ...doIndicator.do2026, status: 'UNRESOLVED_RULE' } };
+    if (options.guidance) selectedIndicator = { ...doIndicator, do2026: { ...doIndicator.do2026,
+      cumulativeInstruction: 'Panduan kumulatif khusus profil.', assessmentInstruction: 'Penilaian masih memerlukan konfirmasi sumber.' } };
+    if (options.unimplemented) selectedIndicator = { ...doIndicator, do2026: { ...doIndicator.do2026, status: 'UNRESOLVED_RULE', reason: 'Aturan pengukuran perlu ditinjau.' } };
     record = { ...doRecord, ...(options.historicalYtd ? { inputBasis: 'YTD_ACTUAL' } : {}),
       ...(options.missing ? { pencapaianRiil: null, isMissing: true, scoringVersion: undefined } : {}) };
     pkpStore.state = { ...pkpStore.state, year: 2026, activePeriod: { year: 2026 }, indicators: [indicator, selectedIndicator],
@@ -104,6 +106,20 @@ test('authenticated private storage gateway frontend', async t => {
     const binary = route => route.fulfill({ status: 200, contentType: 'application/octet-stream',
       headers: { 'Content-Disposition': "attachment; filename=plain.pdf; filename*=UTF-8''bukti%20uji.pdf" }, body: Buffer.from([0, 255, 13, 10, 128]) });
     const evidence = { name: 'fixture.pdf', mimeType: 'application/pdf', buffer: Buffer.from([0, 255, 13, 10, 128]) };
+    const image = { name: 'bukti.png', mimeType: 'image/png', buffer: Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64') };
+    const pdfObjects = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R >>',
+      '<< /Length 0 >>\nstream\n\nendstream'];
+    let pdf = '%PDF-1.4\n';
+    const offsets = [];
+    for (const [index, object] of pdfObjects.entries()) {
+      offsets.push(Buffer.byteLength(pdf));
+      pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+    }
+    const xref = Buffer.byteLength(pdf);
+    pdf += `xref\n0 5\n0000000000 65535 f \n${offsets.map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')}`;
+    pdf += `trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
     async function doFixture({ failAt, pauseAt } = {}) {
       let attempt = 0, failed = false, release;
       const gate = new Promise(resolve => { release = resolve; });
@@ -159,6 +175,29 @@ test('authenticated private storage gateway frontend', async t => {
           assert.deepEqual(exceptions, []);
         } finally { await page.close(); }
       }
+    });
+
+    await t.test('DO editor keeps essential copy visible and expands secondary guidance on demand', async () => {
+      const { page, requests } = await fixture(route => route.abort());
+      try {
+        const editor = await openDoEditor(page, 'do-editor', { guidance: true });
+        await editor.getByText('Evaluasi internal; belum disahkan Dinkes.', { exact: true }).waitFor();
+        await editor.getByText('N dan D harus dari populasi/sampel dan periode yang sama.', { exact: true }).waitFor();
+        await editor.getByText('Penilaian masih memerlukan konfirmasi sumber.', { exact: true }).waitFor();
+        const instructions = editor.getByText('Panduan kumulatif khusus profil.', { exact: true });
+        assert.equal(await instructions.isVisible(), false);
+        await editor.getByText('Panduan rekap', { exact: true }).click();
+        assert.equal(await instructions.isVisible(), true);
+        assert.equal(await editor.getByText('DO_2026_V2', { exact: false }).count(), 0);
+        const zeroWarning = editor.getByText('D = 0 tidak otomatis berarti nihil terverifikasi.', { exact: true });
+        assert.equal(await zeroWarning.count(), 0);
+        await editor.getByLabel('Penyebut aktual (D)', { exact: true }).fill('0');
+        await zeroWarning.waitFor();
+        await editor.getByLabel('Penyebut aktual (D)', { exact: true }).fill('4');
+        assert.equal(await zeroWarning.count(), 0);
+        assert.equal(requests.length, 0);
+        assert.deepEqual(await page.evaluate(() => window.gateway.saves), []);
+      } finally { await page.close(); }
     });
 
     for (const view of ['do-editor', 'do-drawer']) {
@@ -255,6 +294,199 @@ test('authenticated private storage gateway frontend', async t => {
       } finally { await page.close(); }
     });
 
+    for (const view of ['do-editor', 'do-drawer', 'evidence']) {
+      await t.test(`${view} previews private images on demand, restores focus and releases its URL`, async () => {
+        let release;
+        const gate = new Promise(resolve => { release = resolve; });
+        const { page, requests, exceptions } = await fixture(async (route, request) => {
+          assert.equal(request.path, '/storage/download');
+          assert.equal(request.auth, 'Bearer old-access');
+          assert.equal(new URLSearchParams(request.search).get('uploadId'), view === 'evidence' ? 'evidence' : 'stored-evidence');
+          await gate;
+          return route.fulfill({ contentType: image.mimeType, headers: { 'Content-Disposition': 'attachment; filename=bukti.png' }, body: image.buffer });
+        });
+        let downloadCount = 0;
+        page.on('download', () => downloadCount++);
+        try {
+          if (view === 'do-editor') await openDoEditor(page);
+          else await page.evaluate(view => window.gateway.render(view, view === 'evidence' ? 1 : 3), view);
+          const trigger = page.getByRole('button', { name: view === 'do-editor' ? 'Pratinjau bukti tersimpan' : 'Pratinjau bukti dukung', exact: true });
+          await trigger.waitFor();
+          assert.equal(requests.length, 0);
+          await trigger.click();
+          const preview = page.getByRole('dialog', { name: 'Pratinjau bukti dukung', exact: true });
+          await preview.getByRole('status').filter({ hasText: 'Memuat pratinjau' }).waitFor();
+          release();
+          const img = preview.getByRole('img', { name: 'Bukti dukung: bukti.png' });
+          await img.waitFor();
+          await page.waitForFunction(() => { const img = document.querySelector('dialog img'); return img?.complete && img.naturalWidth === 1; });
+          assert.match(await img.getAttribute('src'), /^blob:/);
+          assert.equal(downloadCount, 0);
+          assert.equal(requests.length, 1);
+          assert.deepEqual(await page.evaluate(() => window.gateway.revoked), []);
+          assert.deepEqual(await page.evaluate(() => window.gateway.saves), []);
+          const downloaded = page.waitForEvent('download');
+          await preview.getByRole('button', { name: 'Unduh bukti dukung', exact: true }).click();
+          assert.equal((await downloaded).suggestedFilename(), image.name);
+          await page.waitForFunction(() => window.gateway.revoked.length === 1);
+          assert.equal(requests.length, 1, 'Downloading the preview reuses its authenticated bytes');
+          await preview.getByRole('button', { name: 'Tutup pratinjau', exact: true }).focus();
+          await page.keyboard.press('Escape');
+          await preview.waitFor({ state: 'detached' });
+          assert.equal(await trigger.evaluate(element => element === document.activeElement), true);
+          assert.equal(await page.evaluate(() => window.gateway.revoked.length), 2);
+          if (view === 'do-editor') assert.equal(await page.getByRole('dialog', { name: 'Input DO 2026', exact: true }).count(), 1);
+          assert.deepEqual(exceptions, []);
+        } finally { release(); await page.close(); }
+      });
+    }
+
+    await t.test('DO local image preview is responsive and does not upload, download or save', async () => {
+      const { page, requests, exceptions } = await fixture(route => route.abort());
+      try {
+        await page.evaluate(() => import('/src/index.css'));
+        const editor = await openDoEditor(page);
+        await editor.getByLabel('Lampirkan bukti dukung', { exact: true }).setInputFiles(image);
+        const trigger = editor.getByRole('button', { name: 'Pratinjau file terpilih', exact: true });
+        await trigger.click();
+        const preview = page.getByRole('dialog', { name: 'Pratinjau bukti dukung', exact: true });
+        await preview.getByRole('img', { name: 'Bukti dukung: bukti.png' }).waitFor();
+        await preview.getByText('File lokal.', { exact: false }).waitFor();
+        for (const width of [320, 375, 1440]) {
+          await page.setViewportSize({ width, height: 800 });
+          const bounds = await preview.boundingBox();
+          assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= width, `Preview fits ${width}px`);
+          assert.ok(bounds.y >= 0 && bounds.height <= 800);
+          assert.equal(await preview.evaluate(el => el.scrollWidth <= el.clientWidth), true);
+        }
+        assert.equal(requests.length, 0);
+        assert.deepEqual(await page.evaluate(() => window.gateway.saves), []);
+        await preview.getByRole('button', { name: 'Tutup pratinjau', exact: true }).click();
+        await trigger.waitFor();
+        assert.equal(await editor.getByLabel('Pembilang aktual (N)', { exact: true }).inputValue(), '2');
+        assert.equal(await page.evaluate(() => window.gateway.revoked.length), 1);
+        assert.deepEqual(exceptions, []);
+      } finally { await page.close(); }
+    });
+
+    await t.test('PDF preview uses a local blob object with an explicit download fallback', async () => {
+      const { page, requests } = await fixture(route => route.abort());
+      let downloads = 0;
+      page.on('download', () => downloads++);
+      try {
+        const editor = await openDoEditor(page);
+        await editor.getByLabel('Lampirkan bukti dukung', { exact: true }).setInputFiles({
+          name: 'bukti.pdf', mimeType: 'application/pdf', buffer: Buffer.from(pdf),
+        });
+        await editor.getByRole('button', { name: 'Pratinjau file terpilih', exact: true }).click();
+        const preview = page.getByRole('dialog', { name: 'Pratinjau bukti dukung', exact: true });
+        const frame = preview.locator('object[title="Pratinjau PDF bukti dukung"]');
+        await frame.waitFor();
+        assert.match(await frame.getAttribute('data'), /^blob:/);
+        assert.equal(downloads, 0);
+        assert.equal(requests.length, 0);
+        const downloaded = page.waitForEvent('download');
+        await preview.getByRole('button', { name: 'Unduh bukti dukung', exact: true }).click();
+        assert.equal((await downloaded).suggestedFilename(), 'bukti.pdf');
+        assert.equal(requests.length, 0);
+        await preview.getByRole('button', { name: 'Tutup pratinjau', exact: true }).click();
+        await page.waitForFunction(() => window.gateway.revoked.length === 2);
+      } finally { await page.close(); }
+    });
+
+    for (const mimeType of ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'text/html']) {
+      await t.test(`preview never embeds ${mimeType} and keeps a download fallback`, async () => {
+        const { page, requests } = await fixture(route => route.fulfill({ contentType: mimeType, body: '<script>window.injected=true</script>' }));
+        try {
+          await openDoEditor(page);
+          await page.getByRole('button', { name: 'Pratinjau bukti tersimpan', exact: true }).click();
+          const preview = page.getByRole('dialog', { name: 'Pratinjau bukti dukung', exact: true });
+          await preview.getByRole('status').filter({ hasText: 'Pratinjau format ini belum tersedia' }).waitFor();
+          assert.equal(await preview.locator('iframe, img, object, embed').count(), 0);
+          assert.equal(await page.evaluate(() => window.injected), undefined);
+          assert.equal(await page.evaluate(() => window.gateway.downloads.length), 0);
+          assert.equal(await preview.getByRole('button', { name: 'Unduh bukti dukung', exact: true }).isEnabled(), true);
+          assert.equal(requests.length, 1);
+        } finally { await page.close(); }
+      });
+    }
+
+    await t.test('preview load failure is retryable without saving or automatic download', async () => {
+      let attempt = 0;
+      const { page, requests } = await fixture(route => ++attempt === 1
+        ? route.fulfill({ status: 503, json: { message: 'Preview unavailable' } })
+        : route.fulfill({ contentType: image.mimeType, body: image.buffer }));
+      try {
+        await openDoEditor(page);
+        await page.getByRole('button', { name: 'Pratinjau bukti tersimpan', exact: true }).click();
+        const preview = page.getByRole('dialog', { name: 'Pratinjau bukti dukung', exact: true });
+        await preview.getByRole('alert').filter({ hasText: 'Preview unavailable' }).waitFor();
+        assert.equal(await preview.getByRole('button', { name: 'Unduh bukti dukung', exact: true }).count(), 0);
+        await preview.getByRole('button', { name: 'Coba lagi', exact: true }).click();
+        await preview.getByRole('img').waitFor();
+        assert.equal(requests.length, 2);
+        assert.deepEqual(await page.evaluate(() => window.gateway.saves), []);
+      } finally { await page.close(); }
+    });
+
+    await t.test('corrupt images show a download fallback instead of a broken preview', async () => {
+      const { page } = await fixture(route => route.fulfill({ contentType: 'image/png', body: 'not an image' }));
+      try {
+        await openDoEditor(page);
+        await page.getByRole('button', { name: 'Pratinjau bukti tersimpan', exact: true }).click();
+        const preview = page.getByRole('dialog', { name: 'Pratinjau bukti dukung', exact: true });
+        await preview.getByRole('status').filter({ hasText: 'File tidak dapat ditampilkan' }).waitFor();
+        assert.equal(await preview.getByRole('img').count(), 0);
+        assert.equal(await preview.getByRole('button', { name: 'Unduh bukti dukung', exact: true }).isEnabled(), true);
+      } finally { await page.close(); }
+    });
+
+    for (const expireSession of [false, true]) {
+      await t.test(`loaded preview clears private bytes on ${expireSession ? 'session expiry' : 'tenant change'}`, async () => {
+        const { page, exceptions } = await fixture(route => route.fulfill({ contentType: image.mimeType, body: image.buffer }));
+        try {
+          await openDoEditor(page);
+          await page.getByRole('button', { name: 'Pratinjau bukti tersimpan', exact: true }).click();
+          const preview = page.getByRole('dialog', { name: 'Pratinjau bukti dukung', exact: true });
+          await preview.getByRole('img').waitFor();
+          await page.evaluate(expire => {
+            if (expire) window.dispatchEvent(new CustomEvent('sipkp-session-expired'));
+            else window.gateway.store.commit({ healthCenterId: 'other-center' });
+          }, expireSession);
+          await preview.waitFor({ state: 'detached' });
+          assert.equal(await page.evaluate(() => window.gateway.revoked.length), 1);
+          assert.deepEqual(await page.evaluate(() => window.gateway.saves), []);
+          assert.deepEqual(exceptions, []);
+        } finally { await page.close(); }
+      });
+    }
+
+    for (const closeDuringLoad of [true, false]) {
+      await t.test(`preview ignores late bytes after ${closeDuringLoad ? 'close' : 'scope change'}`, async () => {
+        let release;
+        const gate = new Promise(resolve => { release = resolve; });
+        const { page, exceptions } = await fixture(async route => {
+          await gate;
+          return route.fulfill({ contentType: image.mimeType, body: image.buffer });
+        });
+        try {
+          await openDoEditor(page);
+          const response = page.waitForResponse('**/storage/download?**');
+          await page.getByRole('button', { name: 'Pratinjau bukti tersimpan', exact: true }).click();
+          const preview = page.getByRole('dialog', { name: 'Pratinjau bukti dukung', exact: true });
+          await preview.getByRole('status').waitFor();
+          if (closeDuringLoad) await preview.getByRole('button', { name: 'Tutup pratinjau', exact: true }).click();
+          else await page.evaluate(() => window.gateway.render('none'));
+          release();
+          await response;
+          await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 100)));
+          assert.equal(await page.getByRole('dialog', { name: 'Pratinjau bukti dukung', exact: true }).count(), 0);
+          assert.equal(await page.evaluate(() => window.gateway.downloads.length), 0);
+          assert.deepEqual(exceptions, []);
+        } finally { release(); await page.close(); }
+      });
+    }
+
     for (const failAt of ['content', 'finalize']) {
       await t.test(`DO ${failAt} failure never saves and can retry the selected file`, async () => {
         const { page, requests } = await doFixture({ failAt });
@@ -309,7 +541,13 @@ test('authenticated private storage gateway frontend', async t => {
           assert.equal(await editor.getByLabel('Lampirkan bukti dukung', { exact: true }).isDisabled(), true);
           assert.equal(await editor.getByRole('button', { name: 'Simpan', exact: true }).isDisabled(), true);
           if (reason === 'historicalYtd') assert.equal(await editor.getByRole('combobox', { name: /^Basis N dan D/ }).inputValue(), 'YTD_ACTUAL');
-          if (reason === 'unimplemented') await editor.getByRole('status').filter({ hasText: 'UNRESOLVED_RULE' }).waitFor();
+          if (reason === 'unimplemented') {
+            await editor.getByRole('status').filter({ hasText: 'Input DO 2026 belum tersedia untuk indikator ini.' }).waitFor();
+            const detail = editor.getByText('Aturan pengukuran perlu ditinjau.', { exact: true });
+            assert.equal(await detail.isVisible(), false);
+            await editor.getByText('Lihat alasan', { exact: true }).click();
+            assert.equal(await detail.isVisible(), true);
+          }
           await editor.locator('form').evaluate(form => form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
           assert.deepEqual(await page.evaluate(() => window.gateway.saves), []);
           assert.equal(requests.length, 0);
@@ -333,7 +571,7 @@ test('authenticated private storage gateway frontend', async t => {
         await started;
         await page.evaluate(() => window.gateway.render('do-drawer', 4));
         await editor.waitFor({ state: 'detached' });
-        await page.getByText('Capaian Bulan 4', { exact: true }).waitFor();
+        await page.getByText('Capaian April 2026', { exact: true }).waitFor();
         release();
         await page.waitForFunction(() => !window.gateway.store.isMutating());
         assert.equal(requests.at(-1).path, '/storage/uploads/do-upload-1/finalize');
@@ -351,7 +589,7 @@ test('authenticated private storage gateway frontend', async t => {
         await input.fill('5');
         assert.equal(await page.getByRole('button', { name: 'Edit capaian dan bukti dukung', exact: true }).count(), 0);
         await page.getByRole('button', { name: 'Simpan Capaian', exact: true }).click();
-        await page.getByText('Data capaian bulan 1 tersimpan di server.', { exact: true }).waitFor();
+        await page.getByText('Data capaian Januari 2025 tersimpan di server.', { exact: true }).waitFor();
         assert.deepEqual(await page.evaluate(() => window.gateway.saves), [{ indicatorId: 'indicator', month: 1, year: 2025,
           data: { pencapaianRiil: 5, notes: '', evidenceId: 'evidence' } }]);
         assert.equal(requests.length, 0);

@@ -21,6 +21,7 @@ export interface Do2026Profile {
   readonly calculation: string;
   readonly cumulativePolicy?: string;
   readonly cumulativeInstruction?: string;
+  readonly annualRecapOnly?: boolean;
   readonly numeratorInput?: 'INTEGER' | null;
   readonly denominatorInput?: 'INTEGER' | 'ESTIMATED' | null;
   readonly observationPeriod?: 'CALENDAR_YEAR' | 'PROFILE_REVIEW_REQUIRED';

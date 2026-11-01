@@ -1,8 +1,15 @@
+import { MANAGEMENT_RULES } from './reviewed-management';
+import { CLINICAL_RULES } from './reviewed-clinical';
+import { INFECTIOUS_CROSS_RULES } from './reviewed-infectious-cross';
+
 export type LiteralBand = {
   readonly min: number; readonly max: number | null;
   readonly minInclusive: boolean; readonly maxInclusive: boolean; readonly score: number;
 };
 export type DoRule = {
+  readonly annualRecapOnly?: true;
+  readonly sourceRef?: string;
+  readonly assessmentNote?: string;
   readonly denominatorInput: 'INTEGER' | 'ESTIMATED';
   readonly unit: 'PERCENT' | 'ITEMS_PER_PRESCRIPTION' | 'COUNT' | 'SCORE';
   readonly numeratorLabel: string; readonly denominatorLabel: string;
@@ -32,6 +39,9 @@ const coverage = (target: number): DoRule => ({ ...percent, scoring: { kind: 'CO
 
 // Explicit catalogue identities; DO row numbers are not API IDs. No rule is inferred from labels.
 export const DO_RULES: Readonly<Record<string, DoRule>> = {
+  ...MANAGEMENT_RULES,
+  ...CLINICAL_RULES,
+  ...INFECTIOUS_CROSS_RULES,
   'K2-R50': { ...upper(15.04), numeratorLabel: 'Balita 0–59 bulan pendek/sangat pendek', denominatorLabel: 'Balita 0–59 bulan yang diukur PB/TB pada periode yang sama' },
   'K2-R51': { ...upper(14), numeratorLabel: 'Balita 0–59 bulan dengan BB kurang/sangat kurang', denominatorLabel: 'Balita 0–59 bulan yang ditimbang BB pada periode yang sama' },
   'K2-R52': { ...upper(8), numeratorLabel: 'Balita 0–59 bulan gizi kurang/buruk', denominatorLabel: 'Balita 0–59 bulan yang ditimbang BB dan diukur PB/TB pada periode yang sama' },

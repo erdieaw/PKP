@@ -23,10 +23,14 @@ import { ScoreBadge } from '../common/ScoreBadge';
 import { measurementText } from '../../types/do2026';
 import { OperationalDefinition } from '../common/OperationalDefinition';
 import { Do2026Editor } from '../data-entry/Do2026Editor';
+import { EvidencePreviewDialog } from '../common/EvidencePreviewDialog';
+import { confirmDiscardChanges, useUnsavedChanges } from '../common/useUnsavedChanges';
+import { getMonthlyInputBlockReason, monthPeriodLabel } from '../../services/inputPeriod';
 
 interface IndicatorDetailDrawerProps {
   indicator: OfficialIndicator | null;
   selectedMonth: number;
+  inspectionQuarter?: 1 | 2 | 3 | 4;
   onClose: () => void;
   onSelectIndicator?: (ind: OfficialIndicator) => void;
 }
@@ -34,6 +38,7 @@ interface IndicatorDetailDrawerProps {
 export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
   indicator,
   selectedMonth,
+  inspectionQuarter,
   onClose,
   onSelectIndicator
 }) => {
@@ -46,6 +51,8 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [editingScope, setEditingScope] = useState<string | null>(null);
+  const [previewScope, setPreviewScope] = useState<string | null>(null);
+  const [baseline, setBaseline] = useState('');
   const generation = useRef(0);
   const year = pkpStore.getCurrentYear();
   const center = pkpStore.getSelectedHealthCenterId();
@@ -54,17 +61,34 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
     const record = indicator ? pkpStore.getMonthlyRecord(indicator.id, selectedMonth) : null;
     setRealisasiInput(record?.pencapaianRiil?.toString() ?? '');
     setNotesInput(record?.notes ?? ''); setEvidenceId(record?.evidenceId ?? null);
-    setEvidenceName(''); setError(null); setSavedSuccess(false); setPending(false);
+    setBaseline(JSON.stringify([record?.pencapaianRiil?.toString() ?? '', record?.notes ?? '', record?.evidenceId ?? null]));
+    setEvidenceName(''); setError(null); setSavedSuccess(false); setPending(false); setPreviewScope(null);
     return () => { generation.current++; };
-  }, [indicator?.id, selectedMonth, year, center]);
+  }, [indicator?.id, selectedMonth, year, center, inspectionQuarter]);
+  const monthlyRecord = indicator ? pkpStore.getMonthlyRecord(indicator.id, selectedMonth) : null;
+  const monthlyDo = monthlyRecord?.scoringVersion === 'DO_2026_V2' || (monthlyRecord?.isMissing && Boolean(indicator?.do2026));
+  useUnsavedChanges(Boolean(indicator && !inspectionQuarter && !monthlyDo && baseline &&
+    baseline !== JSON.stringify([realisasiInput, notesInput, evidenceId])), 'indicator-drawer');
   if (!indicator) return null;
 
   const isHead = !!indicator.isHead;
   const officialCode = isHead ? `HEAD ${indicator.sectionCode}` : `${indicator.sectionCode}.${indicator.no.replace('.', '')}`;
-  const rec = pkpStore.getMonthlyRecord(indicator.id, selectedMonth);
+  const quarterlyRecord = inspectionQuarter ? pkpStore.getQuarterlyRecord(indicator.id, inspectionQuarter, year) : null;
+  const rec: ReturnType<typeof pkpStore.getMonthlyRecord> = quarterlyRecord
+    ? { ...quarterlyRecord, isMissing: quarterlyRecord.pencapaianRiil == null }
+    : pkpStore.getMonthlyRecord(indicator.id, selectedMonth);
   const target = pkpStore.getAnnualTargets()[indicator.id];
-  const pic = pkpStore.getPicForIndicator(indicator.id);
-  const headAgg = isHead ? pkpStore.getSubKlasterAggregation(indicator.sectionCode, selectedMonth) : null;
+  const user = pkpStore.getSessionUser();
+  const pic = pkpStore.getPicForIndicator(indicator.id) ?? (user?.role === 'PIC' && pkpStore.getAssignments()[indicator.id] === user.id
+    ? { name: user.name, role: 'PIC indikator', phone: '', avatarColor: 'bg-emerald-600' } : undefined);
+  let quarterScore: number | null = null;
+  if (isHead && inspectionQuarter) {
+    try { quarterScore = pkpStore.getOfficialSheet7Data(inspectionQuarter, year).rows.find(row => row.no === indicator.sectionCode && !row.isKlasterHead)?.nilaiKelompok ?? null; }
+    catch { /* Analytics may be unavailable while the scope loads. */ }
+  }
+  const headAgg = isHead ? inspectionQuarter
+    ? { averageScore: quarterScore, averageCapaian: null, childCount: pkpStore.getIndicators().filter(i => !i.isHead && i.sectionCode === indicator.sectionCode).length }
+    : pkpStore.getSubKlasterAggregation(indicator.sectionCode, selectedMonth) : null;
 
   // Get child elements if isHead
   const childIndicators = isHead 
@@ -74,13 +98,16 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
       )
     : [];
 
-  const user = pkpStore.getCurrentUser();
   const requiresDoEditor = rec.scoringVersion === 'DO_2026_V2' || (rec.isMissing && Boolean(indicator.do2026));
-  const canEditPeriod = pkpStore.canInputOwnPeriod(year) && !pkpStore.getLoadState().loading && !isHead && !pkpStore.isPeriodLocked(year, selectedMonth) &&
-    (user.role === 'ADMIN_PUSKESMAS' || (user.role === 'PIC' && pkpStore.getAssignments()[indicator.id] === user.id));
+  const blockReason = inspectionQuarter ? 'Hanya baca: rincian kumulatif triwulan. Gunakan tampilan Bulanan untuk mengisi bulan tertentu.'
+    : getMonthlyInputBlockReason(year, selectedMonth, indicator.id);
+  const canEditPeriod = !blockReason && !isHead;
   const canEdit = !requiresDoEditor && canEditPeriod;
-  const scopeKey = `${indicator.id}:${year}:${selectedMonth}:${center}`;
-  const currentEvidenceId = requiresDoEditor ? rec.evidenceId : evidenceId;
+  const scopeKey = `${indicator.id}:${year}:${selectedMonth}:${center}:${inspectionQuarter ?? 'month'}`;
+  const periodLabel = inspectionQuarter ? `Kumulatif Januari sampai ${monthPeriodLabel(year, inspectionQuarter * 3)} (TW ${inspectionQuarter})`
+    : monthPeriodLabel(year, selectedMonth);
+  const currentEvidenceId = inspectionQuarter ? null : requiresDoEditor ? rec.evidenceId : evidenceId;
+  const close = () => { if (!pending && !pkpStore.isMutating() && confirmDiscardChanges('indicator-drawer')) onClose(); };
   const handleSave = async () => {
     if (!canEdit || pending) return;
     const val = Number(realisasiInput);
@@ -89,7 +116,10 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
     setPending(true); setError(null); setSavedSuccess(false);
     try {
       await pkpStore.saveRecord(indicator.id, selectedMonth, { pencapaianRiil: val, notes: notesInput, evidenceId });
-      if (epoch === generation.current) setSavedSuccess(true);
+      if (epoch === generation.current) {
+        setSavedSuccess(true);
+        setBaseline(JSON.stringify([realisasiInput, notesInput, evidenceId]));
+      }
     } catch (e) { if (epoch === generation.current) setError(e instanceof Error ? e.message : 'Penyimpanan gagal.'); }
     finally { if (epoch === generation.current) setPending(false); }
   };
@@ -146,7 +176,8 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
           </div>
           <button 
             aria-label="Tutup rincian indikator"
-            onClick={onClose}
+            onClick={close}
+            disabled={pending || pkpStore.isMutating()}
             className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200 transition-colors"
           >
             <X className="w-5 h-5" />
@@ -162,6 +193,9 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
             <h3 className="text-base font-bold text-slate-900 leading-snug">
               {indicator.indikator}
             </h3>
+            <p className="font-semibold text-emerald-800">{periodLabel}</p>
+            <p className="break-words text-slate-600">Puskesmas: {pkpStore.getSelectedHealthCenter()?.name ?? 'Belum dipilih'}</p>
+            {blockReason && <p role="status" className="text-amber-900">{blockReason}</p>}
             <p className="text-slate-500 font-medium">
               Kegiatan: <strong className="text-slate-700">{indicator.kegiatan}</strong>
             </p>
@@ -309,12 +343,12 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
                   <Layers className="w-3.5 h-3.5 text-purple-600" />
                   <span>Daftar {childIndicators.length} Child Elemen Penilaian:</span>
                 </span>
-                <span className="text-[10px] text-slate-500">Klik child untuk input</span>
+                <span className="text-[10px] text-slate-500">{inspectionQuarter ? 'Klik child untuk rincian' : 'Klik child untuk input'}</span>
               </div>
 
               <div className="border border-slate-200 rounded-xl divide-y divide-slate-100 max-h-56 overflow-y-auto">
                 {childIndicators.map((child) => {
-                  const childRec = pkpStore.getMonthlyRecord(child.id, selectedMonth);
+                  const childRec = inspectionQuarter ? pkpStore.getQuarterlyRecord(child.id, inspectionQuarter, year) : pkpStore.getMonthlyRecord(child.id, selectedMonth);
                   const childCode = `${child.sectionCode}.${child.no.replace('.', '')}`;
                   return (
                     <div 
@@ -340,7 +374,7 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
                             ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                             : 'bg-amber-50 text-amber-800 border border-amber-200'
                         }`}>
-                          {childRec.isMissing ? 'Belum diisi' : 'Data server'}
+                          {childRec.pencapaianRiil == null ? 'Belum diisi' : 'Data server'}
                         </span>
                       </div>
                     </div>
@@ -361,7 +395,7 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
             <div className="flex items-center justify-between">
               <span className="font-bold text-slate-800 uppercase tracking-wider text-[11px] flex items-center gap-1">
                 {isHead && <Lock className="w-3.5 h-3.5 text-slate-500" />}
-                <span>{requiresDoEditor ? 'Capaian' : 'Input Capaian'} Bulan {selectedMonth}</span>
+                <span>{inspectionQuarter || requiresDoEditor ? 'Capaian' : 'Input Capaian'} {periodLabel}</span>
               </span>
               {(isHead ? headAgg?.averageScore : rec.nilaiKinerja) == null ? '-' : <ScoreBadge score={(isHead ? headAgg?.averageScore : rec.nilaiKinerja)!} size="sm" provisional={requiresDoEditor} />}
             </div>
@@ -373,6 +407,11 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
                   <strong>Form Terkunci:</strong> Elemen ini adalah Head Penilaian. Pengisian dilakukan pada masing-masing child elemen di atas.
                 </span>
               </div>
+            ) : inspectionQuarter ? (
+              <dl className="grid grid-cols-2 gap-3">
+                <div><dt>Realisasi kumulatif (N)</dt><dd className="font-mono font-bold">{rec.pencapaianRiil ?? '-'}</dd></div>
+                <div><dt>{requiresDoEditor ? 'Penyebut rekap (D)' : 'Capaian kumulatif (%)'}</dt><dd className="font-mono font-bold">{requiresDoEditor ? rec.totalSasaran ?? '-' : rec.capaianRiilPct ?? '-'}</dd></div>
+              </dl>
             ) : requiresDoEditor ? (
               <div className="space-y-3">
                 <dl className="grid grid-cols-2 gap-3">
@@ -385,7 +424,7 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
                   className="rounded-lg bg-emerald-600 px-4 py-2 font-semibold text-white disabled:opacity-50">
                   Edit capaian dan bukti dukung
                 </button>
-                {!canEditPeriod && <p>Hanya Admin atau PIC yang ditugaskan dapat mengubah periode terbuka pada tahun aktif.</p>}
+                {currentEvidenceId && <button type="button" disabled={pending} onClick={() => setPreviewScope(scopeKey)} className="block underline">Pratinjau bukti dukung</button>}
                 {currentEvidenceId && <button disabled={pending} onClick={handleDownload} className="block underline">Unduh bukti dukung</button>}
               </div>
             ) : (
@@ -443,15 +482,16 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
                     Simpan Capaian
                   </button>
                 </div>
-                {!canEdit && <p>Hanya Admin atau PIC yang ditugaskan dapat mengubah periode terbuka.</p>}
+                <p className="text-xs text-slate-600">Simpan untuk {periodLabel}; bukan rekap kumulatif.</p>
                 {evidenceId && <div className="space-y-2"><p>Bukti: {evidenceName || evidenceId}. Simpan capaian untuk menautkan bukti dan catatan.</p>
+                  <button type="button" disabled={pending} onClick={() => setPreviewScope(scopeKey)} className="block underline">Pratinjau bukti dukung</button>
                   <button disabled={pending} onClick={handleDownload} className="underline">Unduh bukti dukung</button>
                 </div>}
 
                 {savedSuccess && (
                   <p className="text-[11px] text-emerald-700 font-bold flex items-center gap-1">
                     <CheckCircle className="w-3.5 h-3.5" />
-                    <span>Data capaian bulan {selectedMonth} tersimpan di server.</span>
+                    <span>Data capaian {periodLabel} tersimpan di server.</span>
                   </p>
                 )}
               </>
@@ -461,6 +501,8 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
           {requiresDoEditor && editingScope === scopeKey && <Do2026Editor key={scopeKey}
             indicator={indicator} record={rec} year={year} month={selectedMonth} canEdit={canEditPeriod}
             onClose={() => setEditingScope(null)} />}
+          {currentEvidenceId && previewScope === scopeKey && <EvidencePreviewDialog key={`${scopeKey}:${currentEvidenceId}`}
+            evidenceId={currentEvidenceId} onClose={() => setPreviewScope(null)} />}
 
           {/* 12-Month Performance Sparkline / Table */}
           {!isHead && (
