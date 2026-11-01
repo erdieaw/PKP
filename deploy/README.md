@@ -1,6 +1,6 @@
 # Deployment Compose Di Dokploy
 
-Gunakan `compose.dokploy.yml` dari **root repository**, terpisah dari `backend/compose.yml` untuk development. File ini menyiapkan FE, BE, PostgreSQL dan Redis berpassword. Storage memakai **MinIO/SILO eksternal privat yang wajib dikonfigurasi**, bukan service MinIO lokal. Hanya FE bergabung ke `dokploy-network`; app dan job operator `ops` mengakses storage lewat jaringan privat. Tidak ada published port host atau `container_name` tetap. Biarkan nama project Compose stabil agar volume DB/Redis tetap sama saat redeploy. Definisi `minio_data` lama sengaja dipertahankan tanpa dipasang ke runtime baru; jangan hapus volumenya.
+Gunakan `compose.dokploy.yml` dari **root repository**, terpisah dari `backend/compose.yml` untuk development. File ini menyiapkan FE, BE dan Redis berpassword, lalu memakai **container PostgreSQL Dokploy yang sudah ada** (lihat bagian *Database PostgreSQL Existing*) alih-alih membuat container database baru. Storage memakai **MinIO/SILO eksternal privat yang wajib dikonfigurasi**, bukan service MinIO lokal. FE dan app/job `ops` bergabung ke `dokploy-network` (app hanya untuk menjangkau database existing); tidak ada published port host atau `container_name` tetap. Biarkan nama project Compose stabil agar volume Redis tetap sama saat redeploy.
 
 ## Urutan Deploy Dari Awal
 
@@ -74,6 +74,29 @@ Uji akun dari mesin operator berhasil untuk bucket HEAD, conditional PUT (overwr
 Buat DNS A/AAAA **hanya untuk domain FE/API** ke server Dokploy; jangan memasang AAAA ke alamat yang tidak melayani server. Pastikan `dokploy-network` tersedia dan Traefik mempunyai entrypoint `web`, `websecure`, serta resolver `letsencrypt` sesuai contoh konfigurasi Anda. Jangan sekaligus membuat router domain otomatis Dokploy yang berbenturan dengan labels file ini.
 
 Frontend tetap memakai `VITE_API_BASE_URL=/api/v1`, ditetapkan saat build dalam Dockerfile. Tidak memerlukan `env_file` runtime frontend, `VITE_API_URL`, atau API secret. **Semua `VITE_*` bersifat publik**; jangan memasukkan `VITE_API_SECRET_KEY`, JWT secret, atau kredensial storage ke frontend.
+
+## Database PostgreSQL Existing
+
+Produksi memakai **container PostgreSQL Dokploy yang sudah ada** (`database-postgresmain-hoc5kd`, PostgreSQL 18, nama task bisa berubah saat redeploy) dan **bukan** database baru di dalam project ini:
+
+- `compose.dokploy.yml` sengaja **tidak** mendeklarasikan service `postgres`. Menambahkannya kembali akan membuat container dan volume kedua yang kosong.
+- Database `sipkp` dan role `sipkp` dibuat **sekali** di container itu oleh operator, dengan password `POSTGRES_PASSWORD` yang sama seperti di env. Contoh (tanpa mencetak password ke log):
+
+```bash
+docker exec -i database-postgresmain-hoc5kd.1.<task> psql -U postgres_erd -d main_db <<'SQL'
+CREATE ROLE sipkp LOGIN PASSWORD '<POSTGRES_PASSWORD>';
+CREATE DATABASE sipkp OWNER sipkp;
+REVOKE CONNECT ON DATABASE sipkp FROM PUBLIC;
+GRANT CONNECT ON DATABASE sipkp TO sipkp;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+SQL
+```
+
+- `DATABASE_URL` memakai hostname service Compose Swarm di `dokploy-network`: `postgresql://sipkp:<url-encoded-password>@database-postgresmain-hoc5kd:5432/sipkp?schema=public` (bukan `postgres`, bukan `127.0.0.1`, dan loopback proxy `15432` tidak dipakai container).
+- Service `app` dan job `ops` bergabung ke `dokploy-network` **hanya** untuk menjangkau database; keduanya tetap `traefik.enable=false` dan tanpa published port. Jangan menambahkan label router untuk keduanya.
+- `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` tidak lagi dipakai service mana pun: nilainya hanya mendokumentasikan role di database existing. Jangan dihapus — `DATABASE_URL` memakai password yang sama.
+- Backup/restore mengikuti service database Dokploy yang existing (volume dan jadwalnya milik service itu). Jangan `down -v` dan jangan menghapus volume project ini untuk memindahkan data.
+- Bila container database diganti nama/pindah oleh Dokploy, perbarui `DATABASE_URL` lalu redeploy; migrasi dan seed tetap dijalankan sebagai job `ops`.
 
 ## Environment Dokploy
 
@@ -149,7 +172,7 @@ Tidak ada seed/migrasi otomatis saat aplikasi mulai. Perintah berikut dari root 
 ```bash
 docker compose --env-file deploy/dokploy.env -f compose.dokploy.yml config --quiet
 docker compose --env-file deploy/dokploy.env -f compose.dokploy.yml build app frontend ops
-docker compose --env-file deploy/dokploy.env -f compose.dokploy.yml up -d --wait postgres redis
+docker compose --env-file deploy/dokploy.env -f compose.dokploy.yml up -d --wait redis
 ```
 
 Operator storage harus memastikan bucket privat eksternal sudah ada, akun runtime least-privilege tersedia, dan probe container di atas berhasil. Tidak ada dependency Compose ke storage eksternal; readiness app akan gagal jika storage/bucket tidak dapat diakses. Jalankan migrasi **sekali per operator**, bukan paralel:

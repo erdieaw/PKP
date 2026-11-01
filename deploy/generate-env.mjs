@@ -7,6 +7,8 @@ import { parseArgs } from 'node:util';
 const help = `Generate a PRIVATE env file for a NEW Dokploy installation (Node.js 22+).
 Usage: node deploy/generate-env.mjs --project <exact-dokploy-project> [options]
   --domain <hostname>       Default: pkp.pkm-ujungpangkah.online (no scheme/path)
+  --db-host <hostname>      Existing PostgreSQL container on dokploy-network;
+                            Default: database-postgresmain-hoc5kd
   --bootstrap-user <name>   Also generate the first admin password (new DB only)
   --minio-credentials      Generate candidate credentials; provision in SILO first
   --output <path>           Default: deploy/dokploy.env relative to this script
@@ -20,6 +22,7 @@ try {
   try {
     ({ values } = parseArgs({ options: {
       project: { type: 'string' }, domain: { type: 'string' },
+      'db-host': { type: 'string' },
       'bootstrap-user': { type: 'string' }, 'minio-credentials': { type: 'boolean' },
       output: { type: 'string' }, help: { type: 'boolean' },
     }, strict: true, allowPositionals: false }));
@@ -36,6 +39,10 @@ try {
     if (domain.length > 253 || !domain.includes('.') || domain.split('.').some(
       label => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label),
     )) throw new Error('--domain must be a DNS hostname without scheme, port, path, or trailing dot.');
+    const dbHost = values['db-host'] ?? 'database-postgresmain-hoc5kd';
+    if (dbHost.length > 253 || dbHost.split('.').some(
+      label => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label),
+    )) throw new Error('--db-host must be a DNS hostname without scheme, port, path, or trailing dot.');
     const bootstrapUser = values['bootstrap-user'];
     if (bootstrapUser !== undefined && !/^[a-zA-Z0-9][a-zA-Z0-9._@-]{2,99}$/.test(bootstrapUser)) {
       throw new Error('--bootstrap-user must contain 3..100 letters, digits, dots, underscores, @ or hyphens.');
@@ -50,7 +57,7 @@ try {
       JWT_SECRET: secret(),
       PROVINCE_CREDENTIAL_KEY: randomBytes(32).toString('base64'),
     };
-    generated.DATABASE_URL = `postgresql://sipkp:${encodeURIComponent(generated.POSTGRES_PASSWORD)}@postgres:5432/sipkp?schema=public`;
+    generated.DATABASE_URL = `postgresql://sipkp:${encodeURIComponent(generated.POSTGRES_PASSWORD)}@${dbHost}:5432/sipkp?schema=public`;
     generated.REDIS_URL = `redis://:${encodeURIComponent(generated.REDIS_PASSWORD)}@redis:6379`;
     if (bootstrapUser !== undefined) {
       generated.BOOTSTRAP_ADMIN_USERNAME = bootstrapUser;
@@ -80,6 +87,7 @@ try {
       closeSync(fd);
     }
     process.stdout.write('Private env file created (0600); no secrets printed. Back it up securely.\n');
+    process.stdout.write(`DATABASE_URL points at the existing PostgreSQL container (${dbHost}).\n`);
     process.stdout.write('Still required: real Turnstile keys, TRAEFIK_TRUSTED_PROXY, verified MINIO_ENDPOINT and provisioned storage credentials.\n');
     if (values['minio-credentials']) {
       process.stdout.write('MinIO credentials are candidates ONLY: register them with a least-privilege policy in SILO before deployment, or replace with SILO-issued credentials.\n');

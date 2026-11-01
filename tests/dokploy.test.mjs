@@ -10,7 +10,7 @@ const env = {
   HOME: process.env.HOME,
   COMPOSE_PROJECT_NAME: 'sipkp-compose-validation',
   POSTGRES_USER: 'test', POSTGRES_PASSWORD: 'test-only',
-  DATABASE_URL: 'postgresql://test:test-only@postgres:5432/test',
+  DATABASE_URL: 'postgresql://sipkp:test-only@database-postgresmain-hoc5kd:5432/sipkp?schema=public',
   REDIS_PASSWORD: 'test-only', REDIS_URL: 'redis://:test-only@redis:6379',
   JWT_SECRET: 'test-only-secret-with-at-least-32-characters',
   PROVINCE_CREDENTIAL_KEY: Buffer.alloc(32).toString('base64'),
@@ -38,8 +38,8 @@ test('Dokploy routes only frontend, requires private external storage, and prese
     assert.equal(service.ports, undefined);
     assert.equal(service.container_name, undefined);
   }
-  assert.deepEqual(Object.keys(services).sort(), ['app', 'frontend', 'ops', 'postgres', 'redis']);
-  const { frontend, app, postgres, redis, ops } = services;
+  assert.deepEqual(Object.keys(services).sort(), ['app', 'frontend', 'ops', 'redis']);
+  const { frontend, app, redis, ops } = services;
   assert.equal(frontend.build.target, 'dokploy');
   assert.equal(app.build.target, 'runtime');
   assert.equal(ops.build.target, 'ops');
@@ -49,15 +49,18 @@ test('Dokploy routes only frontend, requires private external storage, and prese
   assert.equal(frontend.networks.proxy.ipv4_address, app.environment.TRUSTED_PROXY_IPS);
   assert.equal(app.networks.proxy.ipv4_address, '172.30.92.3');
   assert.notEqual(app.networks.proxy.ipv4_address, frontend.networks.proxy.ipv4_address);
-  assert.deepEqual(Object.keys(app.networks).sort(), ['data', 'proxy']);
-  assert.deepEqual(Object.keys(postgres.networks), ['data']);
+  assert.deepEqual(Object.keys(app.networks).sort(), ['data', 'dokploy-network', 'proxy']);
   assert.deepEqual(Object.keys(redis.networks), ['data']);
   assert.equal(networks['dokploy-network'].external, true);
+  assert.equal(app.environment.DATABASE_URL, env.DATABASE_URL);
+  assert.equal(new URL(app.environment.DATABASE_URL).hostname, 'database-postgresmain-hoc5kd');
   assert.equal(frontend.labels['traefik.http.services.sipkp-fe.loadbalancer.server.port'], '8080');
   for (const [name, service] of Object.entries(services)) {
     assert.equal(service.labels['traefik.enable'], name === 'frontend' ? 'true' : 'false');
     assert.ok(Object.keys(service.labels).every(label => !label.includes('storage')));
-    if (name !== 'frontend') assert.equal(service.networks['dokploy-network'], undefined);
+    if (name !== 'frontend') {
+      assert.equal(Object.keys(service.labels).some(label => label.startsWith('traefik.http')), false);
+    }
   }
   assert.equal(frontend.depends_on.app.condition, 'service_healthy');
   assert.ok(app.healthcheck.test.join(' ').includes('/api/v1/health/ready'));
@@ -65,10 +68,9 @@ test('Dokploy routes only frontend, requires private external storage, and prese
   assert.equal(app.environment.TURNSTILE_REQUIRED, 'true');
   assert.equal(app.environment.TURNSTILE_SITE_KEY, env.TURNSTILE_SITE_KEY);
   assert.equal(app.environment.TURNSTILE_SECRET_KEY, env.TURNSTILE_SECRET_KEY);
-  assert.deepEqual(Object.keys(app.depends_on).sort(), ['postgres', 'redis']);
-  assert.equal(app.depends_on.postgres.condition, 'service_healthy');
+  assert.deepEqual(Object.keys(app.depends_on).sort(), ['redis']);
   assert.equal(app.depends_on.redis.condition, 'service_healthy');
-  assert.deepEqual(Object.keys(ops.networks), ['data']);
+  assert.deepEqual(Object.keys(ops.networks), ['data', 'dokploy-network']);
   assert.equal(ops.depends_on, undefined);
   for (const service of [app, ops]) {
     assert.deepEqual(Object.keys(service.environment).filter(key => /BUCKET|MINIO/.test(key)).sort(),
@@ -77,16 +79,18 @@ test('Dokploy routes only frontend, requires private external storage, and prese
       assert.equal(service.environment[key], env[key]);
     }
   }
-  assert.equal(postgres.volumes[0].source, 'postgres_data');
   assert.equal(redis.volumes[0].source, 'redis_data');
   const source = readFileSync(new URL('../compose.dokploy.yml', import.meta.url), 'utf8');
+  // Reuse of the existing Dokploy PostgreSQL container must not reintroduce a DB service.
+  assert.doesNotMatch(source, /^\s{2}postgres:\s*$/m);
+  assert.doesNotMatch(source, /postgres_data|POSTGRES_HOST_AUTH_METHOD/);
   // Compose can omit unused volumes from normalized output; the source must retain it.
   assert.match(source, /^  minio_data:\s*$/m);
   assert.doesNotMatch(source, /MINIO_ROOT_|MINIO_PUBLIC_ENDPOINT|PKP_STORAGE_DOMAIN|sipkp-storage/);
 });
 
 test('Dokploy refuses missing required values and domain/IP overrides stay consistent', () => {
-  for (const name of ['COMPOSE_PROJECT_NAME', 'DATABASE_URL', 'REDIS_URL', 'POSTGRES_PASSWORD', 'REDIS_PASSWORD', 'JWT_SECRET',
+  for (const name of ['COMPOSE_PROJECT_NAME', 'DATABASE_URL', 'REDIS_URL', 'REDIS_PASSWORD', 'JWT_SECRET',
     'PROVINCE_CREDENTIAL_KEY', 'MINIO_ENDPOINT', 'MINIO_ACCESS_KEY', 'MINIO_SECRET_KEY',
     'EVIDENCE_BUCKET', 'REPORTS_BUCKET', 'TRAEFIK_TRUSTED_PROXY', 'TURNSTILE_SITE_KEY', 'TURNSTILE_SECRET_KEY']) {
     for (const value of ['', undefined]) {
