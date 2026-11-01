@@ -3,11 +3,12 @@ import type { FormEvent } from 'react';
 import type { OfficialIndicator } from '../../types/pkp';
 import type { Do2026RecordFields } from '../../types/do2026';
 import { pkpStore } from '../../services/apiStore';
+import { api } from '../../services/apiClient';
 import { OperationalDefinition } from '../common/OperationalDefinition';
 
 interface Props {
   readonly indicator: OfficialIndicator;
-  readonly record: Do2026RecordFields & { readonly pencapaianRiil: number | null; readonly notes?: string };
+  readonly record: Do2026RecordFields & { readonly pencapaianRiil: number | null; readonly notes?: string; readonly evidenceId?: string | null };
   readonly year: number;
   readonly month: number;
   readonly canEdit: boolean;
@@ -22,10 +23,17 @@ export function Do2026Editor({ indicator, record, year, month, canEdit, onClose 
   const [numerator, setNumerator] = useState(record.pencapaianRiil?.toString() ?? '');
   const [denominator, setDenominator] = useState(legacy ? '' : record.totalSasaran?.toString() ?? '');
   const [notes, setNotes] = useState(record.notes ?? '');
+  const [evidenceFile, setEvidenceFile] = useState<File | null>(null);
+  const [uploadedEvidence, setUploadedEvidence] = useState<{ id: string; name: string } | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => { dialog.current?.showModal(); }, []);
+  const active = useRef(true);
+  useEffect(() => {
+    active.current = true;
+    dialog.current?.showModal();
+    return () => { active.current = false; };
+  }, []);
   const supported = profile?.status === 'IMPLEMENTED';
   const blocked = !canEdit || pending || historicalYtd || (convert && !supported);
 
@@ -42,15 +50,39 @@ export function Do2026Editor({ indicator, record, year, month, canEdit, onClose 
     setPending(true);
     setError(null);
     try {
+      let attachment = uploadedEvidence;
+      if (evidenceFile && !attachment) {
+        const metadata = await pkpStore.uploadEvidence(evidenceFile, month);
+        if (!active.current) return;
+        attachment = { id: metadata.evidenceId, name: evidenceFile.name };
+        setUploadedEvidence(attachment);
+      }
       const data: Parameters<typeof pkpStore.saveRecord>[2] = convert
         ? { pencapaianRiil: actualNumerator, totalSasaran: actualDenominator, scoringVersion: 'DO_2026_V2', inputBasis: 'PERIOD_ACTUAL', notes }
         : { pencapaianRiil: actualNumerator, notes };
+      // Omit unchanged evidence so editing numbers never clears an existing attachment.
+      if (attachment) data.evidenceId = attachment.id;
       await pkpStore.saveRecord(indicator.id, month, data, year);
-      onClose();
+      if (active.current) onClose();
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : 'Penyimpanan gagal. Coba kembali.');
+      if (active.current) setError(failure instanceof Error ? failure.message : 'Penyimpanan gagal. Coba kembali.');
     } finally {
-      setPending(false);
+      if (active.current) setPending(false);
+    }
+  }
+
+  const evidenceId = uploadedEvidence?.id ?? record.evidenceId;
+  async function downloadEvidence() {
+    if (!evidenceId || pending) return;
+    setPending(true);
+    setError(null);
+    try {
+      const file = await pkpStore.getEvidenceDownload(evidenceId);
+      if (active.current) api.saveDownload(file, uploadedEvidence?.name ?? `bukti-${evidenceId}`);
+    } catch (failure) {
+      if (active.current) setError(failure instanceof Error ? failure.message : 'Unduhan gagal. Coba kembali.');
+    } finally {
+      if (active.current) setPending(false);
     }
   }
 
@@ -102,9 +134,30 @@ export function Do2026Editor({ indicator, record, year, month, canEdit, onClose 
               className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2" />
           </label>
         </>}
+        <div className="space-y-2 text-sm">
+          <label className="block font-medium">Lampirkan bukti dukung
+            <input type="file" accept=".pdf,.png,.jpg,.jpeg,.xlsx" disabled={blocked}
+              onChange={event => {
+                const file = event.target.files?.[0];
+                event.target.value = '';
+                if (!file) return;
+                if (file.size === 0 || file.size > 10 * 1024 * 1024) {
+                  setError('Ukuran bukti dukung harus antara 1 byte dan 10 MiB.');
+                  return;
+                }
+                setEvidenceFile(file);
+                setUploadedEvidence(null);
+                setError(null);
+              }} className="mt-1 block w-full text-xs" />
+          </label>
+          <p className="text-xs text-slate-500">PDF, PNG, JPEG, atau XLSX, maksimal 10 MiB. Bukti diunggah dan ditautkan setelah Anda memilih Simpan. Bukti lama tetap tersimpan jika tidak diganti.</p>
+          {evidenceFile && <p className="break-words text-xs">Bukti dipilih: {evidenceFile.name}</p>}
+          {evidenceId && <button type="button" disabled={pending} onClick={() => void downloadEvidence()}
+            className="text-xs text-emerald-700 underline disabled:opacity-50">Unduh bukti dukung</button>}
+        </div>
         <OperationalDefinition key={`${indicator.id}:${year}`} indicatorId={indicator.id} year={year} />
         {error && <p role="alert" className="text-sm text-rose-700">{error}</p>}
-        {pending && <p role="status" className="text-sm">Menyimpan ke server...</p>}
+        {pending && <p role="status" className="text-sm">Memproses bukti dan capaian di server...</p>}
         <div className="flex justify-end gap-2">
           <button type="button" disabled={pending} onClick={onClose} className="rounded-lg border border-slate-300 px-4 py-2 text-sm">Batal</button>
           <button type="submit" disabled={blocked} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">

@@ -22,6 +22,7 @@ import { PolarityBadge } from '../common/PolarityBadge';
 import { ScoreBadge } from '../common/ScoreBadge';
 import { measurementText } from '../../types/do2026';
 import { OperationalDefinition } from '../common/OperationalDefinition';
+import { Do2026Editor } from '../data-entry/Do2026Editor';
 
 interface IndicatorDetailDrawerProps {
   indicator: OfficialIndicator | null;
@@ -44,6 +45,7 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [editingScope, setEditingScope] = useState<string | null>(null);
   const generation = useRef(0);
   const year = pkpStore.getCurrentYear();
   const center = pkpStore.getSelectedHealthCenterId();
@@ -74,8 +76,11 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
 
   const user = pkpStore.getCurrentUser();
   const requiresDoEditor = rec.scoringVersion === 'DO_2026_V2' || (rec.isMissing && Boolean(indicator.do2026));
-  const canEdit = !requiresDoEditor && pkpStore.canInputOwnPeriod(year) && !pkpStore.getLoadState().loading && !isHead && !pkpStore.isPeriodLocked(year, selectedMonth) &&
+  const canEditPeriod = pkpStore.canInputOwnPeriod(year) && !pkpStore.getLoadState().loading && !isHead && !pkpStore.isPeriodLocked(year, selectedMonth) &&
     (user.role === 'ADMIN_PUSKESMAS' || (user.role === 'PIC' && pkpStore.getAssignments()[indicator.id] === user.id));
+  const canEdit = !requiresDoEditor && canEditPeriod;
+  const scopeKey = `${indicator.id}:${year}:${selectedMonth}:${center}`;
+  const currentEvidenceId = requiresDoEditor ? rec.evidenceId : evidenceId;
   const handleSave = async () => {
     if (!canEdit || pending) return;
     const val = Number(realisasiInput);
@@ -99,12 +104,12 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
     finally { if (epoch === generation.current) setPending(false); }
   };
   const handleDownload = async () => {
-    if (!evidenceId || pending) return;
+    if (!currentEvidenceId || pending) return;
     const epoch = generation.current;
     setPending(true); setError(null);
     try {
-      const result = await pkpStore.getEvidenceDownload(evidenceId);
-      if (epoch === generation.current) api.saveDownload(result, evidenceName || `bukti-${evidenceId}`);
+      const result = await pkpStore.getEvidenceDownload(currentEvidenceId);
+      if (epoch === generation.current) api.saveDownload(result, evidenceName || `bukti-${currentEvidenceId}`);
     } catch (e) { if (epoch === generation.current) setError(e instanceof Error ? e.message : 'Unduhan gagal.'); }
     finally { if (epoch === generation.current) setPending(false); }
   };
@@ -356,7 +361,7 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
             <div className="flex items-center justify-between">
               <span className="font-bold text-slate-800 uppercase tracking-wider text-[11px] flex items-center gap-1">
                 {isHead && <Lock className="w-3.5 h-3.5 text-slate-500" />}
-                <span>Input Capaian Bulan {selectedMonth}</span>
+                <span>{requiresDoEditor ? 'Capaian' : 'Input Capaian'} Bulan {selectedMonth}</span>
               </span>
               {(isHead ? headAgg?.averageScore : rec.nilaiKinerja) == null ? '-' : <ScoreBadge score={(isHead ? headAgg?.averageScore : rec.nilaiKinerja)!} size="sm" provisional={requiresDoEditor} />}
             </div>
@@ -367,6 +372,21 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
                 <span>
                   <strong>Form Terkunci:</strong> Elemen ini adalah Head Penilaian. Pengisian dilakukan pada masing-masing child elemen di atas.
                 </span>
+              </div>
+            ) : requiresDoEditor ? (
+              <div className="space-y-3">
+                <dl className="grid grid-cols-2 gap-3">
+                  <div><dt>Realisasi aktual (N)</dt><dd className="font-mono font-bold">{rec.pencapaianRiil ?? '-'}</dd></div>
+                  <div><dt>Penyebut aktual (D)</dt><dd className="font-mono font-bold">{rec.totalSasaran ?? '-'}</dd></div>
+                </dl>
+                {rec.notes && <p className="whitespace-pre-wrap break-words">Catatan: {rec.notes}</p>}
+                <p role="status">Angka, basis periode, catatan, dan bukti dukung dikelola bersama di editor DO 2026.</p>
+                <button disabled={!canEditPeriod || pending} onClick={() => setEditingScope(scopeKey)}
+                  className="rounded-lg bg-emerald-600 px-4 py-2 font-semibold text-white disabled:opacity-50">
+                  Edit capaian dan bukti dukung
+                </button>
+                {!canEditPeriod && <p>Hanya Admin atau PIC yang ditugaskan dapat mengubah periode terbuka pada tahun aktif.</p>}
+                {currentEvidenceId && <button disabled={pending} onClick={handleDownload} className="block underline">Unduh bukti dukung</button>}
               </div>
             ) : (
               <>
@@ -386,10 +406,10 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
                   </div>
                   <div>
                     <label className="text-[11px] font-semibold text-slate-600 block mb-1">
-                      {requiresDoEditor ? 'Penyebut aktual (D):' : 'Target Sasaran Bulanan:'}
+                      Target Sasaran Bulanan:
                     </label>
                     <div className="px-3 py-1.5 text-xs font-mono font-bold bg-slate-100 border border-slate-200 rounded-lg text-slate-700">
-                      {requiresDoEditor ? rec.totalSasaran ?? '-' : target?.targetSasaran == null ? '-' : (target.targetSasaran / 12).toFixed(1)}
+                      {target?.targetSasaran == null ? '-' : (target.targetSasaran / 12).toFixed(1)}
                     </div>
                   </div>
                 </div>
@@ -423,8 +443,7 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
                     Simpan Capaian
                   </button>
                 </div>
-                {requiresDoEditor ? <p role="status">Data DO 2026 memerlukan N/D aktual dan basis periode. Tutup rincian ini, lalu pilih sel realisasi pada halaman Input untuk mengedit tanpa mengubah basis data secara diam-diam.</p>
-                  : !canEdit && <p>Hanya Admin atau PIC yang ditugaskan dapat mengubah periode terbuka.</p>}
+                {!canEdit && <p>Hanya Admin atau PIC yang ditugaskan dapat mengubah periode terbuka.</p>}
                 {evidenceId && <div className="space-y-2"><p>Bukti: {evidenceName || evidenceId}. Simpan capaian untuk menautkan bukti dan catatan.</p>
                   <button disabled={pending} onClick={handleDownload} className="underline">Unduh bukti dukung</button>
                 </div>}
@@ -438,6 +457,10 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
               </>
             )}
           </div>
+
+          {requiresDoEditor && editingScope === scopeKey && <Do2026Editor key={scopeKey}
+            indicator={indicator} record={rec} year={year} month={selectedMonth} canEdit={canEditPeriod}
+            onClose={() => setEditingScope(null)} />}
 
           {/* 12-Month Performance Sparkline / Table */}
           {!isHead && (
