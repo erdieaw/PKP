@@ -36,5 +36,8 @@ if (require.main === module) {
   void (async () => {
     const app = await createApp();
     await app.listen(getConfig().port, '0.0.0.0');
-  })().catch(() => { console.error('Application startup failed'); process.exitCode = 1; });
+  })().catch((error) => {
+    console.error('Application startup failed:', error instanceof Error ? (error.stack ?? error.message) : error);
+    process.exitCode = 1;
+  });
 }
