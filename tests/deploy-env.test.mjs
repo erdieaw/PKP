@@ -40,7 +40,7 @@ test('generator creates independent private secrets and matching internal URLs w
   assert.equal(key.toString('base64'), env.PROVINCE_CREDENTIAL_KEY);
   assert.ok(!result.stdout.includes(env.PROVINCE_CREDENTIAL_KEY));
   assert.equal(new URL(env.DATABASE_URL).password, env.POSTGRES_PASSWORD);
-  assert.equal(new URL(env.DATABASE_URL).hostname, 'postgres');
+  assert.equal(new URL(env.DATABASE_URL).hostname, 'database-postgresmain-hoc5kd');
   assert.equal(new URL(env.REDIS_URL).password, env.REDIS_PASSWORD);
   assert.equal(new URL(env.REDIS_URL).hostname, 'redis');
   for (const name of ['MINIO_ENDPOINT', 'MINIO_ACCESS_KEY', 'MINIO_SECRET_KEY', 'TURNSTILE_SITE_KEY',
@@ -93,6 +93,8 @@ test('help and invalid arguments do not create output or echo argument values', 
   const invalid = [[], ['--project', 'INVALID'], ['--project', 'pkp\nJWT_SECRET=injected'],
     ['--project', 'pkp', '--domain', 'https://pkp.example.test'],
     ['--project', 'pkp', '--domain', 'a..test'],
+    ['--project', 'pkp', '--db-host', 'https://db.example.test'],
+    ['--project', 'pkp', '--db-host', 'db:5432'],
     ['--project', 'pkp', '--output', ''],
     ['--project', 'pkp', '--bootstrap-user', 'admin\nJWT_SECRET=injected'],
     ['--unknown-secret', 'do-not-echo-this']];
@@ -145,7 +147,9 @@ test('generated env fails closed until external fields are supplied, then Compos
     for (const key of ['DATABASE_URL', 'REDIS_URL', 'JWT_SECRET', 'PROVINCE_CREDENTIAL_KEY',
       'MINIO_ACCESS_KEY', 'MINIO_SECRET_KEY']) assert.ok(service.environment[key] === env[key], `${key} mismatch`);
   }
-  assert.ok(services.postgres.environment.POSTGRES_PASSWORD === env.POSTGRES_PASSWORD);
+  // The project has no postgres service: DATABASE_URL must target the existing container.
+  assert.equal(services.postgres, undefined);
+  assert.equal(new URL(services.app.environment.DATABASE_URL).hostname, 'database-postgresmain-hoc5kd');
   assert.ok(services.redis.environment.REDIS_PASSWORD === env.REDIS_PASSWORD);
   assert.ok(services.ops.environment.BOOTSTRAP_ADMIN_PASSWORD === env.BOOTSTRAP_ADMIN_PASSWORD);
   assert.equal(services.app.environment.BOOTSTRAP_ADMIN_PASSWORD, undefined);
