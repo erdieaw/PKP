@@ -170,3 +170,17 @@ test('storage examples expose only backend runtime variables and no production c
   assert.equal(prod.MINIO_ROOT_USER, undefined);
   assert.equal(prod.MINIO_ROOT_PASSWORD, undefined);
 });
+
+test('PKP storage runtime policy limits object operations and never grants bucket administration', () => {
+  const policy = JSON.parse(readFileSync(new URL('../deploy/minio-pkp-runtime-policy.json', import.meta.url), 'utf8'));
+  assert.equal(policy.Version, '2012-10-17');
+  assert.deepEqual(policy.Statement, [
+    { Sid: 'BucketReadiness', Effect: 'Allow', Action: ['s3:ListBucket'], Resource: ['arn:aws:s3:::pkponline'] },
+    { Sid: 'ApplicationObjects', Effect: 'Allow', Action: ['s3:GetObject', 's3:PutObject'], Resource: [
+      'arn:aws:s3:::pkponline/staging/*', 'arn:aws:s3:::pkponline/evidence/*', 'arn:aws:s3:::pkponline/reports/*',
+    ] },
+    { Sid: 'UploadCleanup', Effect: 'Allow', Action: ['s3:DeleteObject'], Resource: [
+      'arn:aws:s3:::pkponline/staging/*', 'arn:aws:s3:::pkponline/evidence/*',
+    ] },
+  ]);
+});

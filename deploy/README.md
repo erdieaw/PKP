@@ -52,6 +52,19 @@ Opsi tersebut membuat `MINIO_ACCESS_KEY` 20 karakter dengan prefix `PKP` dan sec
 
 Lengkapi juga `MINIO_ENDPOINT` dengan scheme/hostname/port privat yang diverifikasi, misalnya `http://pkm-u-pangka-01.tail1897af.ts.net:9100` **hanya jika HTTP dan MagicDNS dari container sudah dipastikan**. Jangan menyalin alamat console atau mengganti 9100 menjadi 9000. `TRAEFIK_TRUSTED_PROXY` berasal dari inspect network server, bukan random key. Setelah seluruh field wajib terisi, jalankan `config --quiet` dan probe pada bagian selanjutnya; generator bukan validator kredensial maupun persetujuan cutover.
 
+### Policy Runtime PKP
+
+Template non-secret [minio-pkp-runtime-policy.json](minio-pkp-runtime-policy.json) adalah policy `pkp-runtime` untuk **bucket `pkponline` saja**. Pasang hanya policy ini pada akun aplikasi, tanpa group atau policy tambahan yang memperluas izin. Jika nama bucket berubah, review resource ARN secara eksplisit; jangan memakai wildcard semua bucket.
+
+- `s3:ListBucket` pada bucket dipakai `HeadBucket` readiness; izin ini juga memungkinkan listing nama object dalam bucket khusus PKP, bukan membaca isi semua object.
+- `s3:GetObject` dan `s3:PutObject` hanya untuk `staging/*`, `evidence/*`, `reports/*`. Copy memakai izin baca sumber/tulis tujuan, tanpa izin admin khusus.
+- `s3:DeleteObject` hanya untuk `staging/*` dan `evidence/*`, sesuai cleanup upload gagal/duplikat backend. Akun runtime tidak bisa menghapus laporan atau versi historis object.
+- Tidak ada izin membuat/menghapus bucket, membaca/mengubah bucket policy, mengelola IAM, atau mengakses bucket lain. Jangan mengganti dengan policy built-in `readwrite`/`consoleAdmin`.
+
+Provisioning operator melalui SILO pada 1 November 2026 telah membuat policy dan akun khusus tersebut. Pasangan key disimpan **hanya pada file privat lokal `deploy/pkp-storage.env`**, permission `0600`, diabaikan Git dan tidak disertakan build context frontend. File ini bukan environment aktif aplikasi, tidak dibaca otomatis oleh Compose dan tidak dikirim otomatis ke Dokploy. Buka dengan editor privat untuk memasukkan lima variabel storage ke Environment Dokploy; jangan mencetak isi file ke terminal, chat, screenshot atau log. Jangan menimpa env aktif atau merotasi key lain.
+
+Uji akun dari mesin operator berhasil untuk bucket HEAD, conditional PUT (overwrite ditolak 412), copy/baca evidence dan tulis/baca laporan. Uji akses anonim, bucket lain, prefix di luar aplikasi, pembacaan bucket policy dan penghapusan laporan ditolak 403. Seluruh object uji disposable dibersihkan. **Ini bukan uji dari server Dokploy atau bukti produksi end-to-end**; ulangi konektivitas dan smoke test dari deployment target. Versioning, enkripsi bucket, backup, ACL/firewall dan migrasi object tidak diubah oleh provisioning akun ini.
+
 ## Domain Dan Routing
 
 - FE: `https://pkp.pkm-ujungpangkah.online` -> Traefik -> Nginx **8080**.
