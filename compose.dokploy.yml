@@ -8,7 +8,7 @@ x-backend-environment: &backend-environment
   TURNSTILE_REQUIRED: 'true'
   TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:?Set the public Turnstile site key}
   TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:?Set the server-only Turnstile secret key}
-  DATABASE_URL: ${DATABASE_URL:?Set internal DATABASE_URL with encoded credentials}
+  DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL for the EXISTING PostgreSQL container (database-postgresmain-hoc5kd:5432)}
   REDIS_URL: ${REDIS_URL:?Set internal REDIS_URL with encoded credentials}
   JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
   PROVINCE_CREDENTIAL_KEY: ${PROVINCE_CREDENTIAL_KEY:?Set PROVINCE_CREDENTIAL_KEY}
@@ -71,12 +71,12 @@ services:
       target: runtime
     environment: *backend-environment
     networks:
+      # Existing PostgreSQL lives on dokploy-network; joined for DB access only.
+      dokploy-network:
       proxy:
         ipv4_address: ${PKP_BACKEND_PROXY_IP:-172.30.92.3}
       data:
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -90,24 +90,9 @@ services:
     labels:
       - traefik.enable=false
 
-  postgres:
-    image: postgres:16.10-alpine
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-sipkp}
-      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - data
-    healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
-      interval: 5s
-      timeout: 3s
-      retries: 20
-    restart: unless-stopped
-    labels:
-      - traefik.enable=false
+  # No postgres service: this project reuses the existing Dokploy PostgreSQL
+  # container (database-postgresmain-hoc5kd, database/role `sipkp`). Declaring a
+  # postgres service here would create a second, empty database plus its volume.
 
   redis:
     image: redis:7.4.5-alpine
@@ -140,6 +125,7 @@ services:
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
     networks:
       - data
+      - dokploy-network
     restart: 'no'
     labels:
       - traefik.enable=false
@@ -154,7 +140,6 @@ networks:
   data:
 
 volumes:
-  postgres_data:
   redis_data:
   # Retain the legacy volume declaration for a separately approved data migration.
   minio_data:
