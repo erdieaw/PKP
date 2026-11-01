@@ -46,9 +46,11 @@ export class RecapsService {
         });
         if (assignment?.picUserId !== actor.id) throw new ForbiddenException('PIC may only write assigned indicators');
       }
-      if (getDoProfile(indicatorId)?.status !== 'IMPLEMENTED') throw new BadRequestException('A supported DO_2026_V2 profile is required');
+      const profile = getDoProfile(indicatorId);
+      if (profile?.status !== 'IMPLEMENTED') throw new BadRequestException('A supported DO_2026_V2 profile is required');
+      if (profile.annualRecapOnly && (endMonth !== 12 || dto.confirmed !== true)) throw new BadRequestException({ code: 'ANNUAL_RECAP_REQUIRED', message: 'Profil ini memerlukan rekap tahunan Januari sampai Desember yang dikonfirmasi.' });
       validateDoInput(indicatorId, { numerator: dto.numerator, denominator: dto.denominator });
-      scoreDo2026(indicatorId, { numerator: dto.numerator, denominator: dto.denominator });
+      scoreDo2026(indicatorId, { numerator: dto.numerator, denominator: dto.denominator, annualRecapConfirmed: profile.annualRecapOnly && endMonth === 12 && dto.confirmed === true });
       const identity = { healthCenterId, indicatorId, year, endMonth };
       const where = { healthCenterId_indicatorId_year_endMonth: identity };
       const previous = await tx.periodRecap.findUnique({ where });

@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { DO_SCORING_VERSION, scoreDo2026, unavailableDo } from './scorer';
 import { DO_RULES } from './rules';
+import { DO_REVIEW_HOLDS } from './review-holds';
 
 export type DoObservation = {
   readonly month: number; readonly pencapaianRiil: Prisma.Decimal.Value;
@@ -21,6 +22,8 @@ export function evaluateDoCumulative(indicatorId: string, scope: {
   readonly records: readonly DoObservation[]; readonly months: readonly number[]; readonly recap?: DoRecap;
 }) {
   const endMonth = Math.max(...scope.months);
+  const annualOnly = DO_RULES[indicatorId]?.annualRecapOnly === true;
+  const fullYear = scope.months.length === 12 && scope.months.every((month, index) => month === index + 1);
   const covered = scope.records.filter(row => scope.months.includes(row.month));
   const availableMonths = scope.months.filter(month => covered.some(row => row.month === month && row.scoringVersion === DO_SCORING_VERSION && row.inputBasis === 'PERIOD_ACTUAL'));
   const missingMonths = scope.months.filter(month => !availableMonths.includes(month));
@@ -32,13 +35,15 @@ export function evaluateDoCumulative(indicatorId: string, scope: {
   let dataComplete = false;
   let result = unavailableDo('MISSING_PERIOD_BASIS', 'Diperlukan rekap Januari–akhir periode dari sumber yang sesuai DO; orang unik, populasi dan checklist tidak dijumlahkan antarbulan.');
   if (!DO_RULES[indicatorId]) {
-    result = unavailableDo('UNRESOLVED_RULE', 'Profil pengukuran belum didukung. Tidak memakai rumus umum atau prorata sebagai pengganti.');
+    result = unavailableDo('UNRESOLVED_RULE', DO_REVIEW_HOLDS[indicatorId] ?? 'Profil pengukuran belum didukung. Tidak memakai rumus umum atau prorata sebagai pengganti.');
+  } else if (annualOnly && (!fullYear || !recap?.confirmed || recap.scoringVersion !== DO_SCORING_VERSION)) {
+    result = unavailableDo('ANNUAL_RECAP_REQUIRED', 'Diperlukan rekap tahunan Januari sampai Desember yang dikonfirmasi sesuai DO. Data bulanan, rekap parsial dan YTD lama tidak menggantikannya.');
   } else if (recap && recap.confirmed && recap.scoringVersion === DO_SCORING_VERSION) {
     // A separate, attested source supersedes automatic aggregation; it is never
     // added to monthly observations, including historical V1 observations.
     numerator = new Prisma.Decimal(recap.numerator); denominator = new Prisma.Decimal(recap.denominator);
     aggregationMethod = 'EXPLICIT_YTD_RECAP'; dataComplete = denominator.gt(0);
-    result = scoreDo2026(indicatorId, { numerator, denominator });
+    result = scoreDo2026(indicatorId, { numerator, denominator, annualRecapConfirmed: annualOnly && fullYear });
   } else if (covered.some(row => row.scoringVersion !== DO_SCORING_VERSION)) {
     result = unavailableDo('MIXED_SCORING_VERSIONS', 'Versi bulanan berbeda tidak digabung. Gunakan rekap terpisah dengan sumber periode yang dikonfirmasi.');
   } else if (endpoint) {

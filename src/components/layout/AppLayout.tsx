@@ -19,6 +19,7 @@ import { AnnualTrendDashboard } from '../dashboard/AnnualTrendDashboard';
 import { OfficialIndicator, AuthUser } from '../../types/pkp';
 import { pkpStore } from '../../services/apiStore';
 import { OperatingModeNotice } from '../common/OperatingModeNotice';
+import { confirmDiscardChanges } from '../common/useUnsavedChanges';
 
 interface AppLayoutProps {
   currentUser: AuthUser;
@@ -27,14 +28,22 @@ interface AppLayoutProps {
 
 export function AppLayout(props: AppLayoutProps) {
   useSyncExternalStore(pkpStore.subscribe, pkpStore.getSnapshot, pkpStore.getServerSnapshot);
+  const [activeTab, setActiveTab] = useState<NavTab>(props.currentUser.role === 'PIC' ? 'dashboard-pic' : 'dashboard-exec');
+  const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
   const scopeKey = `${props.currentUser.id}:${pkpStore.getSelectedHealthCenterId()}:${pkpStore.getCurrentYear()}`;
-  return <ScopedLayout key={scopeKey} {...props} />;
+  return <ScopedLayout key={scopeKey} {...props} activeTab={activeTab} setActiveTab={setActiveTab}
+    selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} />;
 }
 
-const ScopedLayout: React.FC<AppLayoutProps> = ({ currentUser, onLogout }) => {
+interface ScopedLayoutProps extends AppLayoutProps {
+  activeTab: NavTab;
+  setActiveTab: (tab: NavTab) => void;
+  selectedMonth: number;
+  setSelectedMonth: (month: number) => void;
+}
+
+const ScopedLayout: React.FC<ScopedLayoutProps> = ({ currentUser, onLogout, activeTab, setActiveTab, selectedMonth, setSelectedMonth }) => {
   const globalMode = !pkpStore.getSelectedHealthCenterId() || !pkpStore.getYears().some(period => period.year === pkpStore.getCurrentYear());
-  const [activeTab, setActiveTab] = useState<NavTab>(currentUser.role === 'PIC' ? 'dashboard-pic' : globalMode ? 'master-data' : 'dashboard-exec');
-  const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth() + 1);
   const [selectedKlaster, setSelectedKlaster] = useState<number>(0); // 0 = Semua
   const selectedPuskesmas = pkpStore.getSelectedHealthCenter()?.name || '';
   const userRole = currentUser.role;
@@ -54,6 +63,12 @@ const ScopedLayout: React.FC<AppLayoutProps> = ({ currentUser, onLogout }) => {
   
   // Modals & Drawers state
   const [selectedIndicatorForDrawer, setSelectedIndicatorForDrawer] = useState<OfficialIndicator | null>(null);
+  const [drawerQuarter, setDrawerQuarter] = useState<1 | 2 | 3 | 4 | undefined>();
+  const openDrawer = (indicator: OfficialIndicator, quarter?: 1 | 2 | 3 | 4) => {
+    if (busy || !confirmDiscardChanges('indicator-drawer')) return;
+    setSelectedIndicatorForDrawer(indicator);
+    setDrawerQuarter(quarter);
+  };
   const [isYearModalOpen, setIsYearModalOpen] = useState<boolean>(false);
   const [isStaffModalOpen, setIsStaffModalOpen] = useState<boolean>(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
@@ -69,12 +84,13 @@ const ScopedLayout: React.FC<AppLayoutProps> = ({ currentUser, onLogout }) => {
   }, []);
 
   const handleNavigateToDataEntry = (klasterId: number) => {
+    if (busy || !confirmDiscardChanges()) return;
     setSelectedKlaster(klasterId);
     setActiveTab('data-entry');
   };
 
   const handleSelectPuskesmasFromDinkes = (selection: string) => {
-    if (busy) return;
+    if (busy || !confirmDiscardChanges()) return;
     // The supervision view currently emits a name; scope mutations always use IDs.
     const centers = pkpStore.getPuskesmasList();
     const matches = centers.filter(center => center.id === selection || center.name === selection);
@@ -99,11 +115,11 @@ const ScopedLayout: React.FC<AppLayoutProps> = ({ currentUser, onLogout }) => {
         activeTab={visibleTab}
         onSelectTab={tab => {
           if (globalMode && tab !== 'master-data') setNotice('Buat atau pilih Puskesmas dan tahun pelaporan terlebih dahulu.');
-          else if (!busy) setActiveTab(tab);
+          else if (!busy && confirmDiscardChanges()) setActiveTab(tab);
           setNavigationOpen(false);
         }}
         selectedKlaster={selectedKlaster}
-        onSelectKlaster={setSelectedKlaster}
+        onSelectKlaster={id => { if (!busy && confirmDiscardChanges('monthly-grid')) setSelectedKlaster(id); }}
         isDinkesMode={isDinkesMode}
         userRole={userRole}
         globalMode={globalMode}
@@ -121,10 +137,10 @@ const ScopedLayout: React.FC<AppLayoutProps> = ({ currentUser, onLogout }) => {
         {/* Top Header */}
         <Header
           selectedMonth={selectedMonth}
-          onSelectMonth={setSelectedMonth}
+          onSelectMonth={month => { if (month !== selectedMonth && !busy && confirmDiscardChanges()) setSelectedMonth(month); }}
           selectedPuskesmas={selectedPuskesmas}
-          onSelectPuskesmas={id => pkpStore.selectHealthCenter(id)}
-          onSelectYear={year => pkpStore.setCurrentYear(year)}
+          onSelectPuskesmas={async id => { if (!busy && id !== pkpStore.getSelectedHealthCenterId() && confirmDiscardChanges()) await pkpStore.selectHealthCenter(id); }}
+          onSelectYear={async year => { if (!busy && year !== pkpStore.getCurrentYear() && confirmDiscardChanges()) await pkpStore.setCurrentYear(year); }}
           busy={busy}
           globalMode={globalMode}
           onOpenNavigation={() => setNavigationOpen(true)}
@@ -132,7 +148,7 @@ const ScopedLayout: React.FC<AppLayoutProps> = ({ currentUser, onLogout }) => {
           onOpenYearModal={() => setIsYearModalOpen(true)}
           onOpenExportModal={() => setIsExportModalOpen(true)}
           onOpenChangePassword={() => setIsChangePasswordOpen(true)}
-          onLogout={onLogout}
+          onLogout={() => { if (!pkpStore.isMutating() && confirmDiscardChanges()) onLogout(); }}
         />
         {notice && <div role="alert" className="px-4 py-3 bg-amber-50 text-amber-900 text-sm flex justify-between gap-2">{notice}<button onClick={() => setNotice('')}>Tutup</button></div>}
         {globalMode && <div role="status" className="px-4 py-3 bg-emerald-50 text-emerald-900 text-sm">{userRole === 'DINKES_ADMIN' ? 'Siapkan Puskesmas melalui Pusat Data Master. Buat dan tetapkan tahun aktif melalui Kelola Periode Tahun. Pilihan tahun di header hanya mengubah tampilan data.' : 'Periode pelaporan belum tersedia. Hubungi Dinkes untuk menyiapkan dan menetapkan tahun aktif; penugasan PIC dikelola Puskesmas.'}</div>}
@@ -150,7 +166,7 @@ const ScopedLayout: React.FC<AppLayoutProps> = ({ currentUser, onLogout }) => {
               <ExecutiveDashboard
                 selectedMonth={selectedMonth}
                 onNavigateToDataEntry={handleNavigateToDataEntry}
-                onNavigateToPicDashboard={() => setActiveTab('dashboard-pic')}
+                onNavigateToPicDashboard={() => { if (!busy && confirmDiscardChanges()) setActiveTab('dashboard-pic'); }}
               />
             )}
 
@@ -161,15 +177,16 @@ const ScopedLayout: React.FC<AppLayoutProps> = ({ currentUser, onLogout }) => {
             {visibleTab === 'dashboard-annual' && (
               <AnnualTrendDashboard
                 onNavigateToMonth={(m) => {
+                  if (busy || !confirmDiscardChanges()) return;
                   setSelectedMonth(m);
                   setActiveTab('data-entry');
                 }}
-                onOpenDrawer={setSelectedIndicatorForDrawer}
+                 onOpenDrawer={ind => openDrawer(ind)}
               />
             )}
 
             {visibleTab === 'dashboard-pic' && !globalMode && (
-              <PicDashboard selectedMonth={selectedMonth} onOpenDrawer={setSelectedIndicatorForDrawer} />
+              <PicDashboard selectedMonth={selectedMonth} onOpenDrawer={ind => openDrawer(ind)} />
             )}
 
             {visibleTab === 'data-entry' && (
@@ -177,7 +194,11 @@ const ScopedLayout: React.FC<AppLayoutProps> = ({ currentUser, onLogout }) => {
                 selectedMonth={selectedMonth}
                 selectedKlaster={selectedKlaster}
                 onSelectKlaster={setSelectedKlaster}
-                onOpenDrawer={setSelectedIndicatorForDrawer}
+                onOpenDrawer={(indicator, quarter) => {
+                  if (busy) return;
+                  setSelectedIndicatorForDrawer(indicator);
+                  setDrawerQuarter(quarter);
+                }}
               />
             )}
 
@@ -215,11 +236,12 @@ const ScopedLayout: React.FC<AppLayoutProps> = ({ currentUser, onLogout }) => {
       {/* Sliding Inspection Drawer */}
       <div inert={busy}>
       {showContent && !globalMode && selectedIndicatorForDrawer && (
-        <IndicatorDetailDrawer
+        <IndicatorDetailDrawer key={`${selectedIndicatorForDrawer.id}:${selectedMonth}:${drawerQuarter ?? 'month'}`}
           indicator={selectedIndicatorForDrawer}
           selectedMonth={selectedMonth}
+          inspectionQuarter={drawerQuarter}
           onClose={() => setSelectedIndicatorForDrawer(null)}
-          onSelectIndicator={(ind) => setSelectedIndicatorForDrawer(ind)}
+           onSelectIndicator={(ind) => openDrawer(ind, drawerQuarter)}
         />
       )}
 

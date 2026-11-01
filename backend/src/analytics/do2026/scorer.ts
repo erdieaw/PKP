@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { DO_RULES } from './rules';
+import { DO_REVIEW_HOLDS } from './review-holds';
 
 export const DO_SCORING_VERSION = 'DO_2026_V2';
 export type DoResult = {
@@ -19,12 +20,13 @@ export const unavailableDo = (status: string, reason: string): DoResult => ({
   scoringVersion: DO_SCORING_VERSION, status, reason, targetMet: null, effectiveDenominator: null,
 });
 
-export function scoreDo2026(indicatorId: string, input: { readonly numerator: Prisma.Decimal.Value; readonly denominator: Prisma.Decimal.Value }): DoResult {
+export function scoreDo2026(indicatorId: string, input: { readonly numerator: Prisma.Decimal.Value; readonly denominator: Prisma.Decimal.Value; readonly annualRecapConfirmed?: boolean }): DoResult {
   const numeratorValue = new Prisma.Decimal(input.numerator);
   const denominatorValue = new Prisma.Decimal(input.denominator);
   if ([numeratorValue, denominatorValue].some(value => !value.isFinite() || value.isNegative())) throw new BadRequestException('Pembilang dan penyebut harus angka nonnegatif yang terbatas');
   const rule = DO_RULES[indicatorId];
-  if (!rule) return unavailableDo('UNRESOLVED_RULE', 'Profil DO belum lengkap; rumus umum tidak digunakan sebagai pengganti.');
+  if (!rule) return unavailableDo('UNRESOLVED_RULE', DO_REVIEW_HOLDS[indicatorId] ?? 'Profil DO belum lengkap; rumus umum tidak digunakan sebagai pengganti.');
+  if (rule.annualRecapOnly && !input.annualRecapConfirmed) return unavailableDo('ANNUAL_RECAP_REQUIRED', 'Profil ini hanya menerima rekap tahunan Januari sampai Desember yang dikonfirmasi; bukan input bulanan atau rekap parsial.');
   if (rule.fixedDenominator !== undefined && !denominatorValue.eq(rule.fixedDenominator)) throw new BadRequestException(`Penyebut sesuai DO harus ${rule.fixedDenominator}`);
   if (denominatorValue.isZero()) return unavailableDo('ZERO_DENOMINATOR', 'Penyebut nol bukan otomatis nihil terverifikasi, N/A, atau nilai 100.');
   if ((rule.fixedDenominator !== undefined || rule.unit === 'COUNT') && !numeratorValue.isInteger()) throw new BadRequestException('Jumlah komponen/dokumen/kelompok harus bilangan bulat');

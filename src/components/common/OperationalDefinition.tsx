@@ -42,7 +42,7 @@ function DefinitionContent({ state }: { readonly state: LoadState }) {
           <div><dt className="font-semibold text-slate-900">Sumber data</dt><dd className="mt-1 whitespace-pre-wrap">{row.dataSource ?? 'Tidak dicantumkan dalam sumber.'}</dd></div>
           {row.notes && <div><dt className="font-semibold text-slate-900">Catatan sumber</dt><dd className="mt-1 whitespace-pre-wrap">{row.notes}</dd></div>}
         </dl>
-        <p className="border-t border-slate-200 pt-3 text-slate-600">{row.implementationStatus === 'IMPLEMENTED' ? 'Profil pengukuran tersedia; skor hanya diberikan pada rentang yang terdefinisi.' : 'Penghitungan otomatis V2 belum tersedia untuk indikator ini.'}</p>
+        <p className="border-t border-slate-200 pt-3 text-slate-600">{row.implementationStatus === 'IMPLEMENTED' ? 'Profil pengukuran tersedia sesuai periode dan ketentuan DO. Pengukuran atau ketercapaian target tidak selalu disertai skor kinerja.' : 'Penghitungan otomatis V2 belum tersedia untuk indikator ini.'}</p>
         {row.reason && <p className="text-slate-600">{row.reason}</p>}
         <details className="text-slate-500"><summary className="cursor-pointer focus-visible:outline-emerald-600">Asal dan versi definisi</summary>
           <dl className="mt-2 space-y-2"><div><dt>Berkas</dt><dd>{row.sourceFile}</dd></div><div><dt>Lokasi sel</dt><dd>{row.sourceRef}</dd></div><div><dt>Versi</dt><dd>{row.version}</dd></div><div><dt>SHA-256 sumber</dt><dd className="break-all">{row.sourceHash}</dd></div></dl>
