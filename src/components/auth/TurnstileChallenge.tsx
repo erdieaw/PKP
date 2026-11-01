@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../../services/apiClient';
 
 interface TurnstileApi {
-  ready(callback: () => void): void;
   render(container: HTMLElement, options: {
     sitekey: string; action: string; theme: string; size: string; language: string;
     'response-field': boolean;
@@ -34,7 +33,9 @@ function loadTurnstile() {
       script.onload = () => {
         const turnstile = window.turnstile;
         if (!turnstile) { fail(); return; }
-        turnstile.ready(() => { clearTimeout(timeout); resolve(turnstile); });
+        // The script has loaded; Cloudflare rejects ready() on async/defer scripts.
+        clearTimeout(timeout);
+        resolve(turnstile);
       };
       document.head.appendChild(script);
     });
