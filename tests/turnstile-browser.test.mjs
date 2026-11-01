@@ -18,7 +18,7 @@ test('login Turnstile lifecycle and responsive states', async t => {
     await server.listen();
     browser = await chromium.launch({ headless: true });
     const origin = server.resolvedUrls.local[0];
-    async function fixture({ enabled = true, brokenScript = false, brokenConfig = false, width = 1440, configDelay = 0, loginStatus = 401 } = {}) {
+    async function fixture({ enabled = true, brokenScript = false, brokenConfig = false, width = 1440, configDelay = 0, loginStatus = 401, rejectAsyncReady = false } = {}) {
       const page = await browser.newPage({ viewport: { width, height: 900 } });
       page.setDefaultTimeout(8000);
       const attempts = [];
@@ -39,9 +39,16 @@ test('login Turnstile lifecycle and responsive states', async t => {
       });
       await page.route('https://challenges.cloudflare.com/**', route => scriptBlocked ? route.abort() : route.fulfill({
         contentType: 'application/javascript',
-        body: `window.fixtureRenders = 0; window.fixtureRemovals = 0;
+        body: `window.fixtureRenders = 0; window.fixtureRemovals = 0; window.fixtureReadyCalls = 0;
+          const script = document.currentScript;
           window.turnstile = {
-            ready(callback) { callback(); },
+            ready(callback) {
+              window.fixtureReadyCalls++;
+              if (${rejectAsyncReady} && (script.async || script.defer)) {
+                throw new Error('Remove async/defer before using turnstile.ready()');
+              }
+              callback();
+            },
             render(container, options) {
               window.fixtureOptions = options; window.fixtureRenders++;
               const frame = document.createElement('iframe'); frame.title = 'Verifikasi keamanan';
@@ -58,6 +65,20 @@ test('login Turnstile lifecycle and responsive states', async t => {
       await page.getByLabel('Kata sandi', { exact: true }).fill('fixture-password');
       return { page, attempts, exceptions, configRequests, recover: () => { scriptBlocked = false; configBlocked = false; } };
     }
+
+    await t.test('async script renders without calling ready, matching the production Cloudflare restriction', async () => {
+      const { page, exceptions, attempts } = await fixture({ rejectAsyncReady: true });
+      try {
+        await page.waitForFunction(() => window.fixtureOptions);
+        assert.equal(await page.locator('script[src*="challenges.cloudflare.com"]').evaluate(script => script.async), true);
+        assert.equal(await page.evaluate(() => window.fixtureReadyCalls), 0);
+        assert.deepEqual(exceptions, []);
+        assert.equal(await page.locator('button[type="submit"]').isDisabled(), true);
+        await page.evaluate(() => window.fixtureOptions.callback('fixture-token'));
+        assert.equal(await page.locator('button[type="submit"]').isDisabled(), false);
+        assert.equal(attempts.length, 0);
+      } finally { await page.close(); }
+    });
 
     await t.test('requires a token, sends it once, then resets after rejected credentials', async () => {
       const { page, attempts, exceptions } = await fixture();
