@@ -10,6 +10,8 @@ export function validateDoInput(indicatorId: string, input: {
   if (!rule) return;
   const numerator = new Prisma.Decimal(input.numerator);
   const denominator = new Prisma.Decimal(input.denominator);
-  if (!numerator.isInteger()) throw new BadRequestException({ code: 'INTEGER_NUMERATOR_REQUIRED', message: 'Jumlah orang, kasus, item, hari, dokumen, atau komponen harus bilangan bulat.' });
+  if (indicatorId === 'K1-R39' && rule.structuredInputKind === 'SEMESTER_SURVEY_ANNUAL') {
+    if (!numerator.isFinite() || numerator.isNegative() || numerator.gt(200) || numerator.decimalPlaces() > 4) throw new BadRequestException({ code: 'INVALID_SURVEY_SUM', message: 'Jumlah dua nilai semester harus 0-200, maksimal empat desimal tanpa pembulatan.' });
+  } else if (!numerator.isInteger()) throw new BadRequestException({ code: 'INTEGER_NUMERATOR_REQUIRED', message: 'Jumlah orang, kasus, item, hari, dokumen, atau komponen harus bilangan bulat.' });
   if (rule.denominatorInput === 'INTEGER' && !denominator.isInteger()) throw new BadRequestException({ code: 'INTEGER_DENOMINATOR_REQUIRED', message: 'Penyebut aktual berupa jumlah orang, kasus, resep, hari, atau komponen harus bilangan bulat. Desimal hanya diizinkan untuk profil estimasi.' });
 }

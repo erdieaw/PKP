@@ -46,6 +46,7 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({ isOpen, on
             </label>
             <div><p className="font-semibold text-slate-600 mb-1">Fasilitas Pelayanan Kesehatan:</p><div className="px-3 py-1.5 bg-slate-100 border border-slate-200 rounded-lg font-bold text-slate-700">{puskesmasName} (TA {year})</div></div>
           </div>
+          {year >= 2026 && <p className="text-slate-600">Periode laporan tidak mengubah lingkup asesmen sumber. Snapshot, satu bulan, satu triwulan, tahun ajaran atau kohort bukan otomatis capaian tahunan. Server menahan hasil yang lingkupnya tidak cocok; data tidak dijumlahkan atau dirata-rata antarbulan.</p>}
           {summary ? <div className="border border-slate-300 rounded-xl p-5 bg-white space-y-4 shadow-xs">
             <div className="text-center space-y-1 pb-3 border-b border-slate-200"><h4 className="font-extrabold text-sm text-slate-900 uppercase">Rekapitulasi Hasil Penilaian Kinerja</h4><p className="font-bold text-slate-700">{summary.puskesmasName}</p><p>{summary.periodLabel} {year}</p></div>
             <table className="w-full text-left border border-slate-200"><thead className="bg-slate-100 text-slate-700 font-bold"><tr><th className="py-2 px-3">Klaster Pelayanan</th><th className="py-2 px-3 text-right">Nilai Klaster</th></tr></thead>

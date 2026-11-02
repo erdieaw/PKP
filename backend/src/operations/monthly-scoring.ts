@@ -7,13 +7,16 @@ import { evaluateDoPeriod } from '../analytics/do2026/period';
 import type { MonthlyRecordDto } from './operations.dto';
 import { validateDoInput } from '../analytics/do2026/input-validation';
 import { DO_RULES } from '../analytics/do2026/rules';
+import { structuredInputKindFor } from '../analytics/do2026/structured-input';
 
 // Year and annual target are the existing persistence scope; the optional target
 // deliberately does not apply to V2. Keep the V1 caller contract explicit.
 export function scoreMonthlyInput(indicator: Parameters<typeof calculateScore>[0], record: MonthlyRecordDto, year: number, annual?: Pick<AnnualTarget, 'totalSasaran' | 'targetSasaran' | 'targetPct'>) {
   if (record.scoringVersion === DO_SCORING_VERSION) {
     if (year < 2026) throw new BadRequestException('DO_2026_V2 requires year 2026 or later');
-    if (DO_RULES[indicator.id]?.annualRecapOnly) throw new BadRequestException({ code: 'ANNUAL_RECAP_REQUIRED', message: 'Profil V2 ini hanya menerima rekap tahunan Januari sampai Desember yang dikonfirmasi melalui Rekap Kumulatif & Tahunan. Input bulanan tidak tersedia.' });
+    const structuredKind = structuredInputKindFor(indicator.id);
+    if (structuredKind === 'DO_SOURCE_ASSESSMENT') throw new BadRequestException({ code: 'SOURCE_ASSESSMENT_REQUIRED', message: 'Gunakan asesmen sumber terstruktur dengan periode eksplisit. N/D bulanan tanpa konteks tidak tersedia.' });
+    if (structuredKind || DO_RULES[indicator.id]?.annualRecapOnly) throw new BadRequestException({ code: 'ANNUAL_RECAP_REQUIRED', message: 'Profil V2 ini hanya menerima rekap tahunan Januari sampai Desember yang dikonfirmasi melalui Rekap Kumulatif & Tahunan. Input bulanan tidak tersedia.' });
     if (record.inputBasis === 'YTD_ACTUAL') throw new BadRequestException({
       code: 'SEPARATE_RECAP_REQUIRED',
       message: 'Simpan rekap kumulatif melalui Rekap Kumulatif & Tahunan dengan catatan sumber dan konfirmasi. Observasi YTD lama tetap dapat dibaca.',

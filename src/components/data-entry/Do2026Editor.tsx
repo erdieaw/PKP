@@ -5,6 +5,7 @@ import type { Do2026RecordFields } from '../../types/do2026';
 import { pkpStore } from '../../services/apiStore';
 import { api } from '../../services/apiClient';
 import { getMonthlyInputBlockReason, monthPeriodLabel } from '../../services/inputPeriod';
+import { structuredInputKindFor } from '../../services/recapStructuredInput';
 import { OperationalDefinition } from '../common/OperationalDefinition';
 import { EvidencePreviewDialog } from '../common/EvidencePreviewDialog';
 import { confirmDiscardChanges, useUnsavedChanges } from '../common/useUnsavedChanges';
@@ -66,7 +67,9 @@ export function Do2026Editor({ indicator, record, year, month, canEdit, onClose 
     return getMonthlyInputBlockReason(year, month, indicator.id) ??
       (historicalYtd ? 'Hanya baca: koreksi YTD melalui rekap terpisah.' :
         !canEdit ? 'Hanya baca: isian ini tidak dapat diubah.' : null) ??
-      (includeProfileRule && convert && (profile?.annualRecapOnly ||
+      (includeProfileRule && convert && (profile?.structuredInputKind === 'DO_SOURCE_ASSESSMENT' || pkpStore.getIndicators().find(row => row.id === indicator.id)?.do2026?.structuredInputKind === 'DO_SOURCE_ASSESSMENT')
+        ? 'Profil ini memerlukan asesmen sumber terstruktur melalui Rekap Kumulatif & Tahunan. Input V2 bulanan tidak tersedia; periode mengikuti DO, bukan otomatis tahunan.' : null) ??
+      (includeProfileRule && convert && (structuredInputKindFor(indicator.id) || profile?.annualRecapOnly ||
         pkpStore.getIndicators().find(row => row.id === indicator.id)?.do2026?.annualRecapOnly)
         ? 'Profil ini hanya menerima rekap tahunan Januari sampai Desember. Input V2 bulanan tidak tersedia, termasuk bulan Desember. Buka Rekap Kumulatif & Tahunan, lalu pilih Desember.' : null);
   };
@@ -158,7 +161,7 @@ export function Do2026Editor({ indicator, record, year, month, canEdit, onClose 
             Konversi ke DO 2026; isi ulang D aktual, bukan prorata.</label>
         </div>}
         {convert && !supported ? <div className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">
-          <p role="status">Input DO 2026 belum tersedia untuk indikator ini.</p>
+          <p role="status">{profile?.structuredInputKind === 'DO_SOURCE_ASSESSMENT' ? 'Pencatatan DO tersedia melalui asesmen sumber terpisah, bukan input bulanan. Hasil hitung mengikuti ketersediaan dan konteks sumber.' : 'Input DO 2026 belum tersedia untuk indikator ini.'}</p>
           {profile?.reason && <details className="mt-2"><summary className="cursor-pointer focus-visible:outline-emerald-600">Lihat alasan</summary>
             <p className="mt-2">{profile.reason}</p>
           </details>}

@@ -1,7 +1,8 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { Equals, IsBoolean, IsInt, IsNumber, IsString, Length, Matches, Max, MaxLength, Min } from 'class-validator';
+import { Allow, Equals, IsBoolean, IsInt, IsNumber, IsString, Length, Matches, Max, MaxLength, Min } from 'class-validator';
 import { TenantQuery } from '../operations/operations.dto';
+import type { RecapStructuredInput } from '../analytics/do2026/structured-input';
 
 export class PeriodRecapQuery extends TenantQuery {
   @ApiProperty({ minimum: 2026, maximum: 9999 }) @Type(() => Number) @IsInt() @Min(2026) @Max(9999)
@@ -12,6 +13,11 @@ export class PeriodRecapQuery extends TenantQuery {
 }
 
 export class SavePeriodRecapDto extends PeriodRecapQuery {
+  // Strict discriminated validation is identity- and year-scoped in the service,
+  // not transformed/coerced by class-transformer (including explicit null).
+  @ApiProperty({ required: false, description: 'Identity-scoped annual ledger or DO_SOURCE_ASSESSMENT. The sourceAssessment profile descriptor declares the required context and observation period.' }) @Allow()
+  declare readonly structuredInput?: RecapStructuredInput;
+
   @ApiProperty() @IsString() @Length(1, 100)
   declare readonly indicatorId: string;
 

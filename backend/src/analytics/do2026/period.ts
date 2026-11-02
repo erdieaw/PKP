@@ -7,12 +7,12 @@ type Observation = {
   readonly totalSasaran: Prisma.Decimal.Value; readonly scoringVersion: string; readonly inputBasis?: string;
 };
 
-export function evaluateDoPeriod(indicatorId: string, records: readonly Observation[], months: readonly number[]) {
+export function evaluateDoPeriod(indicatorId: string, records: readonly Observation[], months: readonly number[], year?: number) {
   const covered = records.filter(record => months.includes(record.month));
   const endpoint = Math.max(...months);
   const record = covered.find(row => row.month === endpoint);
   const cumulative = months.length > 1 && months.every((month, index) => month === index + 1);
-  if (cumulative) return evaluateDoCumulative(indicatorId, { records, months });
+  if (cumulative) return evaluateDoCumulative(indicatorId, { records, months, year });
   const expectedBasis = cumulative ? 'YTD_ACTUAL' : 'PERIOD_ACTUAL';
   const result = covered.some(row => row.scoringVersion !== DO_SCORING_VERSION)
     ? unavailableDo('MIXED_SCORING_VERSIONS', 'Periode berisi versi aturan berbeda. Pisahkan revisi secara eksplisit; hasil tidak digabung.')

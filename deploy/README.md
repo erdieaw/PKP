@@ -1,6 +1,6 @@
 # Deployment Compose Di Dokploy
 
-Gunakan `compose.dokploy.yml` dari **root repository**, terpisah dari `backend/compose.yml` untuk development. File ini menyiapkan FE, BE dan Redis berpassword, lalu memakai **container PostgreSQL Dokploy yang sudah ada** (lihat bagian *Database PostgreSQL Existing*) alih-alih membuat container database baru. Storage memakai **MinIO/SILO eksternal privat yang wajib dikonfigurasi**, bukan service MinIO lokal. FE dan app/job `ops` bergabung ke `dokploy-network` (app hanya untuk menjangkau database existing); tidak ada published port host atau `container_name` tetap. Biarkan nama project Compose stabil agar volume Redis tetap sama saat redeploy.
+Gunakan `compose.dokploy.yml` dari **root repository**, terpisah dari `backend/compose.yml` untuk development. File ini menyiapkan FE, BE dan Redis berpassword, lalu memakai **container PostgreSQL Dokploy yang sudah ada** (lihat bagian *Database PostgreSQL Existing*) alih-alih membuat container database baru. Storage memakai **MinIO/SILO eksternal privat yang wajib dikonfigurasi**, bukan service MinIO lokal. FE, app, dan job `migrate`/`ops` bergabung ke `dokploy-network` (backend/job untuk menjangkau database existing, tanpa routing Traefik); tidak ada published port host atau `container_name` tetap. Biarkan nama project Compose stabil agar volume Redis tetap sama saat redeploy.
 
 ## Urutan Deploy Dari Awal
 
@@ -9,7 +9,7 @@ Gunakan `compose.dokploy.yml` dari **root repository**, terpisah dari `backend/c
 3. Di Dokploy, buat project/environment lalu service **Docker Compose** dari repository Git ini. Pilih branch/commit rilis, context root repository dan Compose path `./compose.dokploy.yml`. Simpan konfigurasi sumber **tanpa Deploy dulu**. Pastikan repository dapat diakses oleh integrasi Git Dokploy.
 4. Temukan nama project Compose aktual yang akan dipakai Dokploy (`-p`/`--project-name` pada konfigurasi/perintah deployment), bukan hanya display name. Jika belum terlihat, gunakan preview/configuration deployment; jangan membuat project name kedua untuk job CLI. Nama ini menjadi argumen `--project` generator.
 5. Untuk instalasi baru, jalankan generator di bagian berikut, lalu lengkapi field layanan eksternal. Isi editor **Environment** Dokploy dengan isi file privat melalui editor/clipboard lokal tepercaya, bukan lewat chat, issue, log CI atau output terminal publik. Simpan salinan privat yang sama di server untuk job CLI; jangan commit file tersebut.
-6. Gunakan routing labels bawaan file ini: **jangan tambahkan domain otomatis di UI Dokploy**. Untuk kontrak network saat ini, nonaktifkan **Isolated Deployments** Dokploy; file sudah membuat bridge privat sendiri. Periksa **Preview Compose** untuk memastikan hanya frontend masuk `dokploy-network`, tidak ada port publik DB/Redis/MinIO, serta entrypoint/resolver cocok dengan Traefik server. Jangan menyalin preview yang memuat secret ke log/chat.
+6. Gunakan routing labels bawaan file ini: **jangan tambahkan domain otomatis di UI Dokploy**. Untuk kontrak network saat ini, nonaktifkan **Isolated Deployments** Dokploy; file sudah membuat bridge privat sendiri. Periksa **Preview Compose** untuk memastikan hanya frontend memiliki routing Traefik, backend/job mengakses database melalui `dokploy-network` tanpa routing publik, tidak ada port publik DB/Redis/MinIO, serta entrypoint/resolver cocok dengan Traefik server. Jangan menyalin preview yang memuat secret ke log/chat.
 7. Ambil IP Traefik sesuai bagian **IP Proxy Dan Rate Limit**, isi `TRAEFIK_TRUSTED_PROXY`, lalu validasi Compose. Dari checkout rilis yang benar pada server target, build dan jalankan dependency/job operator sesuai bagian **Provisioning Pertama**. Jalankan migrasi sekali, seed hanya untuk DB baru yang disetujui, kemudian hidupkan app/frontend.
 8. Tekan **Deploy** di Dokploy dengan commit, environment dan project name yang sama, lalu jalankan checklist **Update Dan Verifikasi**. Jangan membuka layanan untuk pengguna sebelum login Turnstile, readiness, upload/finalize/download dan ekspor berhasil.
 
@@ -93,10 +93,10 @@ SQL
 ```
 
 - `DATABASE_URL` memakai hostname service Compose Swarm di `dokploy-network`: `postgresql://sipkp:<url-encoded-password>@database-postgresmain-hoc5kd:5432/sipkp?schema=public` (bukan `postgres`, bukan `127.0.0.1`, dan loopback proxy `15432` tidak dipakai container).
-- Service `app` dan job `ops` bergabung ke `dokploy-network` **hanya** untuk menjangkau database; keduanya tetap `traefik.enable=false` dan tanpa published port. Jangan menambahkan label router untuk keduanya.
+- Service `app` dan job `migrate`/`ops` bergabung ke `dokploy-network` **hanya** untuk menjangkau database; semuanya tetap `traefik.enable=false` dan tanpa published port. Jangan menambahkan label router untuk backend/job.
 - `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` tidak lagi dipakai service mana pun: nilainya hanya mendokumentasikan role di database existing. Jangan dihapus — `DATABASE_URL` memakai password yang sama.
 - Backup/restore mengikuti service database Dokploy yang existing (volume dan jadwalnya milik service itu). Jangan `down -v` dan jangan menghapus volume project ini untuk memindahkan data.
-- Bila container database diganti nama/pindah oleh Dokploy, perbarui `DATABASE_URL` lalu redeploy; migrasi dan seed tetap dijalankan sebagai job `ops`.
+- Bila container database diganti nama/pindah oleh Dokploy, perbarui `DATABASE_URL` dan `MIGRATION_DATABASE_URL` bila dipakai, lalu redeploy; migrasi berjalan lewat job `migrate`, sedangkan seed tetap manual melalui `ops` hanya untuk provisioning database baru yang disetujui.
 
 ## Environment Dokploy
 
@@ -140,7 +140,7 @@ Tailscale pada host tidak otomatis menyediakan DNS/rute/izin yang sama untuk con
 docker compose --env-file deploy/dokploy.env -f compose.dokploy.yml run --rm --no-deps ops node -e 'const u = new URL(process.env.MINIO_ENDPOINT); require("node:dns").lookup(u.hostname, (e) => { if (e) { console.error(e.code); process.exit(1); } }); fetch(new URL("/minio/health/live", u), {signal: AbortSignal.timeout(10000)}).then(r => { console.log("S3 health HTTP", r.status); process.exitCode = r.ok ? 0 : 1; }).catch(e => { console.error(e.code || e.name); process.exitCode = 1; });'
 ```
 
-Ulangi probe yang sama dengan `run --rm --no-deps app node -e ...` untuk jalur app (ops hanya di network `data`, app di `data` dan `proxy`). Probe ini hanya DNS/rute/TLS/HTTP health, **bukan bukti izin bucket atau instance/data yang benar**. Jangan memakai `curl -k` atau mematikan validasi TLS. Jika endpoint SILO tidak menyediakan health path tersebut, gunakan probe S3 terautentikasi yang disetujui operator tanpa mencetak key atau signed request. Setelah schema siap, readiness app menguji akses bucket dengan kredensial runtime; lanjutkan smoke test tulis/finalize/baca dan ekspor disposable sesuai izin.
+Ulangi probe yang sama dengan `run --rm --no-deps app node -e ...` untuk jalur app (ops di network `data` dan `dokploy-network`, app juga di `proxy`). Probe ini hanya DNS/rute/TLS/HTTP health, **bukan bukti izin bucket atau instance/data yang benar**. Jangan memakai `curl -k` atau mematikan validasi TLS. Jika endpoint SILO tidak menyediakan health path tersebut, gunakan probe S3 terautentikasi yang disetujui operator tanpa mencetak key atau signed request. Setelah schema siap, readiness app menguji akses bucket dengan kredensial runtime; lanjutkan smoke test tulis/finalize/baca dan ekspor disposable sesuai izin.
 
 - Atur MagicDNS/DNS container, forwarding/rute host ke tailnet, serta identitas sumber hasil bridge/SNAT berdasarkan hasil pengujian. Jangan menambahkan host networking, `privileged`, atau mount socket Docker ke aplikasi sebagai jalan pintas.
 - Batasi ACL/grants Tailscale ke identitas/tag backend yang diperlukan dan port **9100** pada peer SILO yang tepat (serta operator terotorisasi secara terpisah). Policy default yang mengizinkan semua tetap memberi akses: **hapus/persempit aturan broad yang overlap**, bukan sekadar menambah grant sempit. Uji sumber yang diizinkan dan sumber yang harus ditolak, termasuk console/port lain.
@@ -161,29 +161,29 @@ docker network inspect dokploy-network --format '{{range .Containers}}{{println 
 
 Gunakan alamat IP saja (misalnya hasil inspect tanpa `/16`), atau `/32` untuk satu alamat IPv4. **Jangan menyalin prefix subnet interface `/16` sebagai trust range**: itu dapat mempercayai seluruh aplikasi lain pada jaringan Dokploy. CIDR hanya untuk jaringan proxy terisolasi yang memang seluruh anggotanya dipercaya. Setelah Traefik direcreate/IP berubah, perbarui env dan recreate frontend.
 
-Nginx hanya menerima client IP dari proxy tepercaya tersebut, lalu **menimpa** `X-Forwarded-For` ke satu IP terverifikasi, `X-Forwarded-Host` ke host, dan proto ke `https`. Backend tidak dihubungkan ke network publik Dokploy. Traefik harus tetap menolak forwarding header dari client langsung; jangan gunakan `forwardedHeaders.insecure=true`. Jika menambahkan CDN/proxy lain, validasi rantai trusted IP lagi, jangan mempercayai header begitu saja.
+Nginx hanya menerima client IP dari proxy tepercaya tersebut, lalu **menimpa** `X-Forwarded-For` ke satu IP terverifikasi, `X-Forwarded-Host` ke host, dan proto ke `https`. Backend bergabung ke `dokploy-network` untuk database, tetapi tidak memiliki routing Traefik atau published port. Traefik harus tetap menolak forwarding header dari client langsung; jangan gunakan `forwardedHeaders.insecure=true`. Jika menambahkan CDN/proxy lain, validasi rantai trusted IP lagi, jangan mempercayai header begitu saja.
 
 Default kuota: login 5/IP/menit, publik 120/IP/menit, baca 600/user/menit, tulis 120/user/menit. Redis gagal tetap menghasilkan 503. Uji identitas IP dari dua koneksi client nyata sebelum membuka layanan; unit test lokal tidak membuktikan konfigurasi jaringan server Anda.
 
 ## Provisioning Pertama
 
-Tidak ada seed/migrasi otomatis saat aplikasi mulai. Perintah berikut dari root repository di **server target**, dengan secret tersimpan privat; contoh memakai file env CLI. Di terminal Dokploy dengan environment sudah diekspor, flag `--env-file` dapat dihilangkan.
+Seed tidak otomatis. Migrasi schema sekarang dijalankan job `migrate` pada deployment Compose, **bukan di startup/restart backend**. Perintah berikut dari root repository di **server target**, dengan secret tersimpan privat; contoh memakai file env CLI. Di terminal Dokploy dengan environment sudah diekspor, flag `--env-file` dapat dihilangkan. Pastikan backup database tersedia dan pemulihannya sudah diuji sebelum deployment; Compose ini tidak membuat backup otomatis.
 
 ```bash
 docker compose --env-file deploy/dokploy.env -f compose.dokploy.yml config --quiet
-docker compose --env-file deploy/dokploy.env -f compose.dokploy.yml build app frontend ops
+docker compose --env-file deploy/dokploy.env -f compose.dokploy.yml build migrate app frontend ops
 docker compose --env-file deploy/dokploy.env -f compose.dokploy.yml up -d --wait redis
 ```
 
-Operator storage harus memastikan bucket privat eksternal sudah ada, akun runtime least-privilege tersedia, dan probe container di atas berhasil. Tidak ada dependency Compose ke storage eksternal; readiness app akan gagal jika storage/bucket tidak dapat diakses. Jalankan migrasi **sekali per operator**, bukan paralel:
+Operator storage harus memastikan bucket privat eksternal sudah ada, akun runtime least-privilege tersedia, dan probe container di atas berhasil. Tidak ada dependency Compose ke storage eksternal; readiness app akan gagal jika storage/bucket tidak dapat diakses. **Pada provisioning pertama, wajib jalankan migrasi berikut dan pastikan exit code 0 sebelum seed atau menyalakan aplikasi.** Jika migrasi gagal, hentikan urutan provisioning dan perbaiki penyebabnya; jangan lanjut ke seed. Jangan menjalankan deployment/migrasi paralel. Deployment normal setelah provisioning menjalankan job yang sama secara otomatis melalui `up` dan aman mengulang pemeriksaan migrasi yang sudah diterapkan:
 
 ```bash
-docker compose --env-file deploy/dokploy.env -f compose.dokploy.yml run --rm --no-deps ops npm run db:deploy
+docker compose --env-file deploy/dokploy.env -f compose.dokploy.yml run --rm --no-deps migrate
 ```
 
 Jangan menjalankan `init-storage.mjs` produksi dengan akun runtime atau memperluas policy menjadi admin agar script berhasil. Jika provisioning bucket baru memang disetujui, lakukan terpisah dengan akun operator, gunakan nilai `EVIDENCE_BUCKET`/`REPORTS_BUCKET` yang memang disetujui, dan cek policy existing tetap privat. Script pembuat bucket bukan pemeriksa/penghapus policy publik existing.
 
-**Hanya database baru dan dengan persetujuan provisioning**: isi `BOOTSTRAP_ADMIN_USERNAME` dan `BOOTSTRAP_ADMIN_PASSWORD` (minimal 12 karakter), lalu jalankan:
+**Hanya database baru dan dengan persetujuan provisioning, setelah migrasi di atas berhasil**: isi `BOOTSTRAP_ADMIN_USERNAME` dan `BOOTSTRAP_ADMIN_PASSWORD` (minimal 12 karakter), lalu jalankan:
 
 ```bash
 docker compose --env-file deploy/dokploy.env -f compose.dokploy.yml run --rm --no-deps ops npm run db:seed
@@ -197,7 +197,17 @@ Setelah schema dan bucket siap:
 docker compose --env-file deploy/dokploy.env -f compose.dokploy.yml up -d --no-build --wait app frontend
 ```
 
-Di Dokploy pilih tipe Docker Compose dengan compose path `compose.dokploy.yml`, environment yang sama, lalu Deploy. Jika Deploy pertama dijalankan sebelum provisioning, readiness app akan gagal dan frontend menunggu; selesaikan job operator di atas lalu deploy ulang. Profile `tools` memastikan service `ops` tidak ikut startup normal.
+Di Dokploy pilih tipe Docker Compose dengan compose path `compose.dokploy.yml`, environment yang sama, lalu Deploy. Job `migrate` selalu termasuk deployment normal. Backend menunggu `service_completed_successfully` dari migrasi dan Redis sehat; frontend menunggu backend sehat. Jika schema gagal dimigrasi, backend baru tidak mulai. Jika bucket belum siap, readiness backend gagal dan frontend menunggu. Profile `tools` memastikan service `ops` (termasuk seed) tidak ikut startup normal.
+
+## Gerbang Migrasi Otomatis
+
+- `migrate` memakai target Dockerfile khusus, berjalan sebagai user `node`, dengan `npm run db:deploy` yang hanya memanggil `prisma migrate deploy`. Tidak menjalankan seed, `db push`, reset, penghitungan histori atau inisialisasi storage.
+- Environment job hanya `NODE_ENV` dan koneksi database; tidak menerima JWT, key integrasi, kredensial storage atau bootstrap admin. Jaringan hanya `dokploy-network` untuk mengakses PostgreSQL existing, tanpa port publik, routing Traefik, volume data atau restart otomatis.
+- Opsional `MIGRATION_DATABASE_URL` menyediakan koneksi langsung dengan role migrator. Jika kosong, job memakai `DATABASE_URL` existing agar konfigurasi lama tetap dapat dipakai. Role migrator sebaiknya memiliki hak DDL yang diperlukan, sedangkan role runtime cukup hak aplikasi. **Kedua URL wajib menuju database dan schema yang sama**, dengan host yang merujuk instance yang sama. Jangan membuat role/merotasi kredensial existing tanpa persetujuan operator.
+- `compose up` normal menjalankan ulang job yang sudah selesai, termasuk ketika image tidak berubah. Prisma hanya menerapkan migrasi yang masih pending. Setelah job manual berhasil, deploy berikutnya boleh mengulang pemeriksaan yang sama. Gunakan Compose yang mendukung kondisi tersebut; runtime lokal teruji pada **Compose v5.1.0**, bukan bukti versi Dokploy server sudah sama.
+- Jangan memakai custom command Dokploy `--no-deps`, `--no-start`, atau `start`/`restart` untuk rilis kode baru: perintah itu dapat melewati gerbang. Gunakan deployment `up` normal tanpa pembatas service yang menghilangkan `migrate`; lihat Preview Compose Dokploy dan pastikan dependency ini tidak hilang. Restart Docker backend saja tidak memanggil job migrasi.
+- Kegagalan job mengembalikan exit nonzero pada deployment. Periksa log `migrate`, koreksi penyebabnya, lalu deploy ulang. Migrasi SQL yang gagal dapat memerlukan penanganan Prisma terkontrol; jangan otomatis menjalankan `migrate resolve`, menandai sukses, seed atau reset.
+- Dependency startup bukan transaksi deployment atau rollback otomatis. Backend lama yang masih berjalan dan tidak direcreate dapat tetap melayani; Compose juga dapat menghentikan/merecreate container sebelum seluruh deployment selesai. **Tidak ada jaminan zero downtime atau pemulihan otomatis versi lama.** Gunakan migrasi aditif/backward-compatible, serialkan deployment, dan rencanakan maintenance serta rollback kode terpisah dari pemulihan database.
 
 ## Update Dan Verifikasi
 
@@ -215,14 +225,25 @@ NGINX_TEST_IMAGE=pkp-frontend-test:local node --test tests/deployment-nginx.test
 
 Tes runtime membuat container Nginx disposable dengan upstream fixture di container yang sama dan port host loopback acak, memeriksa sintaks, raw PUT 2/10 MiB termasuk transfer chunked, penolakan lebih dari 10 MiB, batas JSON umum 1 MiB, metode non-PUT, serta byte download evidence/export. Tidak memakai backend/DB/MinIO asli atau kredensial. Pemeriksaan directive memastikan buffering off; fixture ini **bukan** pengukuran streaming end-to-end melalui Traefik/Tailscale/SILO.
 
-Backup DB dan object sebelum migrasi. Untuk update, build image baru, jalankan `ops npm run db:deploy` secara eksplisit jika ada migrasi, lalu:
+Pengujian gerbang migrasi tambahan, tidak memakai database aplikasi atau file env privat:
 
 ```bash
-docker compose --env-file deploy/dokploy.env -f compose.dokploy.yml up -d --build --no-deps --wait app frontend
+node --test tests/dokploy-migration-runtime.test.mjs
+node backend/test/disposable-dokploy-migration.mjs
+```
+
+Suite pertama menyalin hanya dependency/restart dari Compose nyata ke fixture offline, memakai image Node lokal tanpa pull/build dan container tanpa jaringan. Delapan skenario memeriksa urutan sukses, kegagalan, job tertunda, pemulihan, restart backend, pengulangan image/config sama, serta penolakan exit sukses usang untuk backend baru. Jika daemon/image lokal tidak tersedia, tes ini skip secara eksplisit. Suite kedua membangun target `migrate` sebenarnya dan menjalankan Prisma terhadap PostgreSQL disposable, memeriksa seluruh delapan migrasi termasuk JSONB `structuredInput`, dua pengulangan tanpa perubahan schema/ledger/data penanda, tidak ada user seed, dan exit gagal pada autentikasi salah. Semua resource test milik UUID dibersihkan. Ini bukan uji produksi, konektivitas server Dokploy atau bukti backup existing sudah tersedia.
+
+Backup DB dan object sebelum migrasi. Untuk update, pastikan kode dan seluruh berkas migrasi tersedia di source yang dibuild Dokploy, lalu gunakan Deploy/Redeploy normal. Padanan CLI di root repository target:
+
+```bash
+docker compose --env-file deploy/dokploy.env -f compose.dokploy.yml up -d --build --wait app frontend
+docker compose --env-file deploy/dokploy.env -f compose.dokploy.yml ps --all migrate app frontend
+docker compose --env-file deploy/dokploy.env -f compose.dokploy.yml logs --tail 100 migrate
 curl --fail https://pkp.pkm-ujungpangkah.online/api/v1/health/ready
 ```
 
-Readiness mengecek DB, Redis dan kedua bucket; bukan bukti policy least-privilege, isolasi jaringan, identitas instance/data, katalog, atau seluruh workflow. Uji login, refresh halaman/deep link, raw PUT evidence lebih dari 1 MiB tetapi di bawah 10 MiB, finalize, download evidence dan hasil export melalui browser dengan autentikasi. Pastikan Network browser hanya mengakses origin FE/API, tanpa presigned URL, redirect atau request MinIO. Uji penolakan body di atas 10 MiB dan JSON di atas 1 MiB, serta penolakan download lintas tenant. Periksa HTTP dialihkan ke HTTPS di domain FE/API. Nginx memakai Docker DNS dan me-resolve ulang backend setelah container diganti.
+Hasil normal job `migrate` adalah **Exited (0)**, bukan service yang harus tetap running. Pastikan exit code tersebut dan backend/frontend sehat sebelum menyatakan deployment berhasil; jangan hanya melihat build sukses. Readiness mengecek DB, Redis dan kedua bucket; bukan bukti policy least-privilege, isolasi jaringan, identitas instance/data, katalog, atau seluruh workflow. Uji login, refresh halaman/deep link, raw PUT evidence lebih dari 1 MiB tetapi di bawah 10 MiB, finalize, download evidence dan hasil export melalui browser dengan autentikasi. Pastikan Network browser hanya mengakses origin FE/API, tanpa presigned URL, redirect atau request MinIO. Uji penolakan body di atas 10 MiB dan JSON di atas 1 MiB, serta penolakan download lintas tenant. Periksa HTTP dialihkan ke HTTPS di domain FE/API. Nginx memakai Docker DNS dan me-resolve ulang backend setelah container diganti.
 
 Jangan gunakan `down -v`, menghapus volume, mengganti project name, atau seed ulang untuk memperbarui kode. Stack ini **tidak mengimpor otomatis database/berkas laptop**. Pemindahan existing memerlukan backup/restore DB+object serta key yang sesuai. Tetap diperlukan backup/restore drill, pemisahan akun DB migrator/runtime, policy storage, monitoring dan review keamanan sebelum menyatakan siap produksi. DNS, TLS dan deployment publik belum dijalankan oleh perubahan konfigurasi ini.
 
@@ -236,7 +257,8 @@ Jangan mengubah `objectKey`, re-seed, menghitung ulang histori bulanan/tahunan, 
 
 - **Generator menolak file existing:** ini pengaman, bukan error yang perlu diatasi dengan menghapus file. Edit field eksternal yang belum diisi; untuk redeploy pakai kembali secret existing. Gunakan path baru hanya untuk instalasi baru yang benar-benar terpisah.
 - **Compose meminta field wajib:** isi field kosong pada Environment dan file privat CLI yang sama. Generator sengaja tidak membuat key Turnstile, IP proxy atau endpoint. Jangan menjalankan `docker compose config` tanpa `--quiet` pada terminal/log bersama.
-- **App unhealthy/frontend menunggu:** periksa migrasi schema, kecocokan DB/Redis credentials, DNS/rute/TLS SILO dari container dan izin `HeadBucket`. Health HTTP MinIO 200 tidak membuktikan kredensial benar. Jangan memperbaiki dengan seed ulang, mengganti volume, membuka bucket publik atau menonaktifkan TLS validation.
+- **Migrasi gagal/backend baru tidak mulai:** periksa log service `migrate`, akses PostgreSQL existing, role DDL dan kesamaan target database/schema pada URL migrator/runtime. Setelah penyebab diperbaiki, Deploy ulang tanpa `--no-deps`. Jangan menghapus histori migrasi atau menandai migrasi berhasil tanpa pemeriksaan.
+- **App unhealthy/frontend menunggu:** pastikan `migrate` Exited (0), lalu periksa kecocokan DB/Redis credentials, DNS/rute/TLS SILO dari container dan izin `HeadBucket`. Health HTTP MinIO 200 tidak membuktikan kredensial benar. Jangan memperbaiki dengan seed ulang, mengganti volume, membuka bucket publik atau menonaktifkan TLS validation.
 - **Login challenge ditolak:** cocokkan pasangan key, hostname widget dan `PKP_DOMAIN`/`FRONTEND_URL`, waktu server serta akses keluar Cloudflare. Jangan mematikan `TURNSTILE_REQUIRED` pada produksi.
 - **502/TLS/routing salah:** cocokkan port frontend 8080, network Traefik dan entrypoint/resolver; hapus konflik router domain otomatis. Jika IP Traefik berubah, perbarui trust IP dan recreate frontend. Jangan mempercayai `0.0.0.0/0`.
 - **Data terlihat kosong setelah deploy:** hentikan write dan periksa project name/volume/database/endpoint/bucket, jangan seed untuk menutupi kesalahan target. Perubahan endpoint tidak memindahkan object atau histori.

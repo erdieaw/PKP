@@ -32,6 +32,7 @@ const oldIds = [
 const ruleChunks = [MANAGEMENT_RULES, CLINICAL_RULES, INFECTIOUS_CROSS_RULES];
 const holdChunks = [MANAGEMENT_HOLDS, CLINICAL_HOLDS, INFECTIOUS_CROSS_HOLDS];
 const reviewedEntries = ruleChunks.flatMap(chunk => Object.entries(chunk));
+const structuredIds = ['K1-R40', 'K5-R38', 'K1-R39', 'K2-R44', 'K4-R16', 'K4-R20'];
 const heldEntries = holdChunks.flatMap(chunk => Object.entries(chunk));
 const byId = new Map(source.map(row => [row.indicatorId, row]));
 const yearMonths = Array.from({ length: 12 }, (_, index) => index + 1);
@@ -186,18 +187,18 @@ const reviewedLabels: Readonly<Record<string, readonly [RegExp, RegExp]>> = {
 };
 
 test('all 272 source rows partition into the unchanged 23, reviewed chunks, and specific holds', t => {
-  const identities = [...oldIds, ...reviewedEntries.map(([id]) => id), ...heldEntries.map(([id]) => id)];
+  const identities = [...oldIds, ...reviewedEntries.map(([id]) => id), ...structuredIds, ...heldEntries.map(([id]) => id)];
   assert.equal(source.length, 272);
   assert.equal(byId.size, 272);
   assert.equal(oldIds.length, 23);
   assert.deepEqual(ruleChunks.map(chunk => Object.keys(chunk).length), [26, 5, 19]);
-  assert.deepEqual(holdChunks.map(chunk => Object.keys(chunk).length), [82, 81, 36]);
+  assert.deepEqual(holdChunks.map(chunk => Object.keys(chunk).length), [80, 80, 33]);
   assert.equal(reviewedEntries.length, 50);
-  assert.equal(heldEntries.length, 199);
-  assert.equal(Object.keys(DO_RULES).length, 73);
+  assert.equal(heldEntries.length, 193);
+  assert.equal(Object.keys(DO_RULES).length, 79);
   assert.equal(new Set(identities).size, identities.length, 'no spread may silently overwrite a duplicate identity');
   assert.deepEqual(sorted(identities), sorted(byId.keys()));
-  assert.deepEqual(sorted(Object.keys(DO_RULES)), sorted([...oldIds, ...reviewedEntries.map(([id]) => id)]));
+  assert.deepEqual(sorted(Object.keys(DO_RULES)), sorted([...oldIds, ...reviewedEntries.map(([id]) => id), ...structuredIds]));
   assert.deepEqual(sorted(Object.keys(DO_REVIEW_HOLDS)), sorted(heldEntries.map(([id]) => id)));
   assert.deepEqual(sorted(Object.keys(reviewedFixtures)), sorted(reviewedEntries.map(([id]) => id)));
   assert.deepEqual(sorted(Object.keys(reviewedLabels)), sorted(reviewedEntries.map(([id]) => id)));
@@ -459,8 +460,6 @@ const holdReasons: Readonly<Record<string, RegExp>> = {
   'K1-R34': /tujuh vaksin.*kalender/,
   'K1-R35': /15 jenis alkes\/BMHP.*POCT.*snapshot tahunan/,
   'K1-R38': /SOP\/register\/tindak lanjut\/publikasi/,
-  'K1-R39': /survei semester I dan II/,
-  'K1-R40': /RTM minimal dua kali.*rekomendasi/,
   'K1-R43': /lima tahunan dan tahunan.*D=5/,
   'K1-R44': /kegiatan PPI.*D jumlah total kegiatan.*terencana.*sembilan kelompok/,
   'K1-R45': /bulanan\/triwulan\/semester\/tahunan/,
@@ -550,7 +549,6 @@ const holdReasons: Readonly<Record<string, RegExp>> = {
   'K2-R39': /D\/S.*snapshot.*tidak ditetapkan/,
   'K2-R40': /1-6 tahun.*risiko.*paket/,
   'K2-R43': /oralit DAN zinc.*orang versus episode/,
-  'K2-R44': /LROA.*tiga laporan.*25 persen/,
   'K2-R45': /perkiraan kasus pneumonia.*parameter estimasi/,
   'K2-R47': /surviving infant.*kohort/,
   'K2-R48': /12-23.*11-23/,
@@ -606,9 +604,7 @@ const holdReasons: Readonly<Record<string, RegExp>> = {
   'K4-R12': /KLB.*tidak ada KLB.*applicability/,
   'K4-R14': /0,54 x 10.*N>D/,
   'K4-R15': /penduduk kabupaten-kota.*pecahan/,
-  'K4-R16': /kohort TBC satu tahun sebelumnya/,
   'K4-R19': /20 kontak erat.*estimasi/,
-  'K4-R20': /PB.*Y-1.*MB.*Y-2/,
   'K4-R22': /suspek.*kasus positif nol/i,
   'K4-R23': /ACT.*pasien versus kasus\/episode.*hasil pengobatan berulang.*episode lain/,
   'K4-R24': /3, 7, 14, 21 dan 28.*lintas tahun/,
@@ -633,7 +629,6 @@ const holdReasons: Readonly<Record<string, RegExp>> = {
   'K5-R28': /sesi versus pasien unik/,
   'K5-R29': /minimum 12.*melampaui rencana/,
   'K5-R36': /waktu tunggu.*kebijakan setempat/,
-  'K5-R38': /2 keikutsertaan.*150%/,
   'K5-R40': /applicability rawat inap/,
   'K5-R41': /Empat kelompok.*D=4/,
   'K5-R42': /rekonsiliasi obat.*mengonsumsi obat/,
@@ -647,20 +642,20 @@ test('every held identity has an independent specific reason fixture, never an u
 });
 
 for (const [id, pattern] of Object.entries(holdReasons)) {
-  test(`${id} remains held for its ID-specific source conflict`, () => {
+  test(`${id} retains its source caveat and cannot use unstructured N/D`, () => {
     const reason = DO_REVIEW_HOLDS[id];
     assert.ok(reason);
     assert.match(reason, pattern);
     assert.equal(DO_RULES[id], undefined);
     const profile = getDoProfile(id);
-    assert.equal(profile?.status, 'UNRESOLVED_RULE');
-    assert.equal(profile?.reason, reason);
-    assert.equal(profile?.cumulativePolicy, 'UNSUPPORTED');
+    assert.equal(profile?.status, profile?.calculationAvailability === 'AVAILABLE_WITH_CONTEXT' ? 'CONTEXTUAL' : 'SOURCE_INPUT_ONLY');
+    assert.equal(profile?.inputAvailable, true);
+    assert.equal(profile?.structuredInputKind, 'DO_SOURCE_ASSESSMENT');
+    assert.equal(profile?.cumulativePolicy, 'EXPLICIT_SOURCE_ASSESSMENT_REQUIRED');
     assert.equal(profile?.sourceRef, byId.get(id)?.sourceRef);
     for (const [numerator, denominator] of [[0, 0], [0, 100], [100, 100], [101, 100], [1, 0]] as const) {
       const result = scoreDo2026(id, { numerator, denominator, annualRecapConfirmed: true });
-      assert.equal(result.status, 'UNRESOLVED_RULE');
-      assert.equal(result.reason, reason);
+      assert.equal(result.status, 'SOURCE_ASSESSMENT_REQUIRED');
       assert.equal(result.nilaiKinerja, null);
       assert.equal(result.measurementValue, null);
       assert.equal(result.targetMet, null);
@@ -669,16 +664,14 @@ for (const [id, pattern] of Object.entries(holdReasons)) {
     for (const months of [[1], [12], yearMonths]) {
       const records = months.map(month => ({ ...observation(month), pencapaianRiil: 100 }));
       const period = evaluateDoPeriod(id, records, months);
-      assert.equal(period.status, 'UNRESOLVED_RULE');
-      assert.equal(period.reason, reason);
+      assert.equal(period.status, 'SOURCE_ASSESSMENT_REQUIRED');
       assert.equal(period.measurementValue, null);
       assert.equal(period.isComplete, false);
       const result = evaluateDoCumulative(id, {
         months, records: [...records, { ...observation(12), pencapaianRiil: 100, inputBasis: 'YTD_ACTUAL' }],
         recap: { ...recap(), numerator: 100, endMonth: Math.max(...months) },
       });
-      assert.equal(result.reason, reason);
-      assert.equal(result.status, 'UNRESOLVED_RULE');
+      assert.equal(result.status, 'SOURCE_ASSESSMENT_REQUIRED');
       assert.equal(result.measurementValue, null);
       assert.equal(result.targetMet, null);
       assert.equal(result.dataComplete, false);
@@ -752,7 +745,7 @@ test('the independent audit holds exactly 55 former candidates: 36 management, 1
 });
 
 for (const [id, sourceRef] of Object.entries(movedHoldFixtures)) {
-  test(`${id} audit hold preserves its exact source identity and cannot persist even a confirmed annual recap`, async () => {
+  test(`${id} preserves its source identity and rejects a confirmed recap without source assessment`, async () => {
     assert.equal(byId.get(id)?.sourceRef, sourceRef);
     assert.equal(getDoProfile(id)?.sourceRef, sourceRef);
     assert.ok(DO_REVIEW_HOLDS[id]);
@@ -764,7 +757,7 @@ for (const [id, sourceRef] of Object.entries(movedHoldFixtures)) {
     assert.equal(textTargetFixtures[id], undefined);
     const f = serviceFixture(id);
     await assert.rejects(() => f.service.save(f.actor, { ...f.dto, numerator: 100 }),
-      (error: unknown) => error instanceof BadRequestException && error.message === 'A supported DO_2026_V2 profile is required');
+      (error: unknown) => error instanceof BadRequestException && (error.getResponse() as { code?: string }).code === 'SOURCE_ASSESSMENT_REQUIRED');
     assert.deepEqual(f.writes, []);
     assert.deepEqual(f.audits, []);
   });
@@ -789,7 +782,7 @@ for (const [id, sourcePattern, numerator, denominator] of [
   ['K4-R28', /SMP dan SMA[\s\S]*selama bulan pada kurun waktu tertentu/, 1, 1],
   ['K4-R33', /100% Stop[\s\S]*75%[\s\S]*30%[\s\S]*Berita Acara[\s\S]*periode tertentu[\s\S]*periode yang sama/, 20, 100],
 ] as const) {
-  test(`${id} source semantics remain unsupported, not a best snapshot, goal cap, unique-patient union or annualized monthly ratio`, () => {
+  test(`${id} bare N/D cannot become a best snapshot, goal cap, unique-patient union or annualized monthly ratio`, () => {
     const row = byId.get(id)!;
     assert.match([row.definition, row.calculation, row.notes ?? ''].join('\n'), sourcePattern);
     const expected = [null, null, null, false, 'ARITHMETIC_ONLY', 'NOT_VERIFIED'];
@@ -800,8 +793,7 @@ for (const [id, sourcePattern, numerator, denominator] of [
       recap: { ...recap(denominator), numerator },
     });
     for (const result of [score, annual]) {
-      assert.equal(result.status, 'UNRESOLVED_RULE');
-      assert.equal(result.reason, DO_REVIEW_HOLDS[id]);
+      assert.equal(result.status, 'SOURCE_ASSESSMENT_REQUIRED');
       assert.deepEqual([result.measurementValue, result.nilaiKinerja, result.targetMet,
         result.assessmentComplete, result.completionScope, result.observationStatus], expected);
     }
@@ -968,16 +960,16 @@ function serviceFixture(indicatorId: string) {
         assert.deepEqual(query, { where: { healthCenterId_indicatorId_year_endMonth: { healthCenterId, indicatorId, year: 2026, endMonth: 12 } } });
         return saved;
       },
-      create: async ({ data }: { data: Omit<PeriodRecap, 'id' | 'createdAt' | 'updatedAt' | 'numerator' | 'denominator'> & { numerator: number; denominator: number } }) => {
+      create: async ({ data }: { data: Omit<PeriodRecap, 'id' | 'createdAt' | 'updatedAt' | 'numerator' | 'denominator' | 'structuredInput'> & { numerator: number; denominator: number; structuredInput: Prisma.InputJsonValue | typeof Prisma.DbNull } }) => {
         assert.equal(saved, null);
         writes.push('create');
-        saved = { ...data, id: 'recap', numerator: new Prisma.Decimal(data.numerator), denominator: new Prisma.Decimal(data.denominator), createdAt: new Date('2026-12-31T00:00:00Z'), updatedAt: new Date('2026-12-31T00:00:00Z') };
+        saved = { ...data, structuredInput: data.structuredInput === Prisma.DbNull ? null : data.structuredInput as Prisma.JsonValue, id: 'recap', numerator: new Prisma.Decimal(data.numerator), denominator: new Prisma.Decimal(data.denominator), createdAt: new Date('2026-12-31T00:00:00Z'), updatedAt: new Date('2026-12-31T00:00:00Z') };
         return saved;
       },
-      update: async ({ data }: { data: Pick<PeriodRecap, 'notes' | 'confirmed' | 'scoringVersion' | 'updatedBy' | 'revision'> & { numerator: number; denominator: number } }) => {
+      update: async ({ data }: { data: Pick<PeriodRecap, 'notes' | 'confirmed' | 'scoringVersion' | 'updatedBy' | 'revision'> & { numerator: number; denominator: number; structuredInput: Prisma.InputJsonValue | typeof Prisma.DbNull } }) => {
         assert.ok(saved);
         writes.push('update');
-        saved = { ...saved, ...data, numerator: new Prisma.Decimal(data.numerator), denominator: new Prisma.Decimal(data.denominator) };
+        saved = { ...saved, ...data, structuredInput: data.structuredInput === Prisma.DbNull ? null : data.structuredInput as Prisma.JsonValue, numerator: new Prisma.Decimal(data.numerator), denominator: new Prisma.Decimal(data.denominator) };
         return saved;
       },
     },

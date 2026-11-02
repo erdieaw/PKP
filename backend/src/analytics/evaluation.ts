@@ -6,6 +6,7 @@ import { evaluateDoPeriod } from './do2026/period';
 import { DO_SCORING_VERSION } from './do2026/scorer';
 import { getDoProfile } from './do2026/profiles';
 import { evaluateDoCumulative, type DoRecap } from './do2026/cumulative';
+import { structuredInputKindFor } from './do2026/structured-input';
 
 type EvaluationData = {
   readonly indicators: readonly Indicator[]; readonly targets: readonly AnnualTarget[];
@@ -14,7 +15,7 @@ type EvaluationData = {
   readonly sections: (Omit<Section, 'isActive'> & { isActive?: boolean })[];
 };
 
-export function evaluateDataset(data: EvaluationData, months: number[]) {
+export function evaluateDataset(data: EvaluationData, months: number[], year?: number) {
   const targets = new Map(data.targets.map(target => [target.indicatorId, target]));
   const records = new Map(data.records.map(record => [`${record.indicatorId}:${record.month}`, record]));
   let populated = 0;
@@ -22,10 +23,12 @@ export function evaluateDataset(data: EvaluationData, months: number[]) {
     const target = targets.get(indicator.id);
     const present = months.map(month => records.get(`${indicator.id}:${month}`)).filter((record): record is MonthlyRecord => record !== undefined);
     populated += present.length;
-    const recap = months.every((month, index) => month === index + 1) ? data.recaps?.find(row => row.indicatorId === indicator.id && row.endMonth === months.length) : undefined;
-    if (recap) return { indicator, indicatorId: indicator.id, ...evaluateDoCumulative(indicator.id, { records: present, months, recap }), do2026: getDoProfile(indicator.id) ?? null };
+    const sourceAssessment = structuredInputKindFor(indicator.id) === 'DO_SOURCE_ASSESSMENT';
+    const recap = sourceAssessment || months.every((month, index) => month === index + 1)
+      ? data.recaps?.find(row => row.indicatorId === indicator.id && row.endMonth === Math.max(...months)) : undefined;
+    if (recap) return { indicator, indicatorId: indicator.id, ...evaluateDoCumulative(indicator.id, { records: present, months, recap, year }), do2026: getDoProfile(indicator.id) ?? null };
     if (present.some(record => record.scoringVersion === DO_SCORING_VERSION)) {
-      return { indicator, indicatorId: indicator.id, ...evaluateDoPeriod(indicator.id, present, months), do2026: getDoProfile(indicator.id) ?? null };
+      return { indicator, indicatorId: indicator.id, ...evaluateDoPeriod(indicator.id, present, months, year), do2026: getDoProfile(indicator.id) ?? null };
     }
     if (present.some(record => record.scoringVersion && record.scoringVersion !== SCORING_VERSION)) throw new ConflictException('Unsupported record scoring version');
     const achievement = present.length ? present.reduce((sum, record) => sum.plus(record.pencapaianRiil), new Prisma.Decimal(0)).toNumber() : null;

@@ -210,6 +210,28 @@ export class ExportService implements OnModuleInit, OnModuleDestroy {
       'observationStatus' in item ? item.observationStatus : 'NOT_ASSESSED',
     ]);
     indicators.columns.forEach(column => { column.width = 24; });
+    let localSheet: ExcelJS.Worksheet | undefined;
+    for (const item of summary.indicators) {
+      const local = 'localResolutionResult' in item ? item.localResolutionResult : undefined;
+      if (!local) continue;
+      if (!localSheet) {
+        localSheet = workbook.addWorksheet('Local Resolutions');
+        localSheet.addRow(['Indicator', 'Decision', 'Approval', 'Source status', 'Measurement scope', 'Source scope', 'Metric', 'Description', 'Primary', 'Value', 'Unit', 'Status', 'Numerator', 'Denominator', 'Original target (not applied)', 'Explicit local target', 'Local target met', 'Local target authority', 'Local target reference', 'Completion scope', 'Assessment complete', 'Observation validation', 'Acceptance reference', 'Measurement policy reference', 'Correction authority reference', 'Unresolved source conflicts', 'Timeliness assessment']);
+        localSheet.columns.forEach(column => { column.width = 28; });
+      }
+      for (const metric of local.metrics) localSheet.addRow([
+        item.indicatorId, local.decisionId, local.approvalStatus, local.sourceStatus,
+        local.assessmentScope.label, `${local.sourcePeriod.kind}: ${local.sourcePeriod.startDate} - ${local.sourcePeriod.endDate}`,
+        metric.key, metric.label, metric.primary, metric.value, metric.unit, metric.status,
+        metric.numerator, metric.denominator, JSON.stringify(local.originalTarget),
+        local.alternativeTarget?.metricKey === metric.key ? local.alternativeTarget.value : null, metric.targetMet,
+        local.alternativeTarget?.metricKey === metric.key ? local.alternativeTarget.authority : null,
+        local.alternativeTarget?.metricKey === metric.key ? local.alternativeTarget.reference : null,
+        local.completionScope, local.assessmentComplete, local.observationStatus,
+        local.acceptanceReference, local.measurementPolicyReference, local.correctionAuthorityReference,
+        local.sourceConflicts.join('; '), local.timelinessStatus ?? null,
+      ]);
+    }
     return Buffer.from(await workbook.xlsx.writeBuffer());
   }
 
@@ -234,6 +256,18 @@ export class ExportService implements OnModuleInit, OnModuleDestroy {
           if (item.reason) doc.text(item.reason);
           if (item.do2026) doc.text(item.do2026.sourceRef);
           if ('aggregationMethod' in item) doc.text(`Rekap: ${item.aggregationMethod}; angka rekap tersedia: ${item.dataComplete}; bulan belum tersedia: ${item.missingMonths.join(', ') || '-'}; revisi: ${item.recapRevision}. ${item.recapNotes ?? ''}`);
+          const local = 'localResolutionResult' in item ? item.localResolutionResult : undefined;
+          if (local) {
+            doc.text(`Solusi lokal: ${local.decisionId}; ${local.approvalStatus}; sumber ${local.sourceStatus}. ${local.assessmentScope.label}`);
+            doc.text(`Target sumber (tidak diterapkan): ${JSON.stringify(local.originalTarget)}. Kelengkapan: ${local.completionScope}; penilaian lengkap: ${local.assessmentComplete}; ${local.observationStatus}.`);
+            doc.text(`Referensi penerimaan: ${local.acceptanceReference}; kebijakan pengukuran: ${local.measurementPolicyReference}; keputusan koreksi lokal: ${local.correctionAuthorityReference}.`);
+            doc.text(`Konflik sumber tetap terbuka: ${local.sourceConflicts.join('; ')}`);
+            for (const metric of local.metrics) {
+              doc.text(`${metric.key}: ${metric.value ?? 'N/A'} ${metric.unit}; ${metric.status}; N: ${metric.numerator ?? 'N/A'}; D: ${metric.denominator ?? 'N/A'}; target lokal: ${metric.targetMet === null ? 'N/A' : metric.targetMet ? 'tercapai' : 'belum tercapai'}`);
+            }
+            if (local.alternativeTarget) doc.text(`Target lokal eksplisit: ${local.alternativeTarget.metricKey} ${local.alternativeTarget.comparator} ${local.alternativeTarget.value}; ${local.alternativeTarget.authority}; ${local.alternativeTarget.reference}`);
+            if (local.timelinessStatus) doc.text(`Ketepatan waktu: ${local.timelinessStatus}`);
+          }
           doc.moveDown(0.3);
         }
       }

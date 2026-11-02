@@ -1,3 +1,7 @@
+import type { RecapStructuredInput } from '../../types/do2026';
+import type { SourceAssessmentPeriod } from '../../types/sourceAssessment';
+import type { LocalResolutionResult } from '../../types/localResolution';
+
 export const recapMonths = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'] as const;
 
 export interface PeriodRecapItem {
@@ -7,6 +11,7 @@ export interface PeriodRecapItem {
   readonly denominator: number | null;
   readonly measurementValue: number | null;
   readonly measurementUnit: string | null;
+  readonly scoringVersion?: string;
   readonly nilaiKinerja: number | null;
   readonly status: string;
   readonly reason: string | null;
@@ -17,6 +22,10 @@ export interface PeriodRecapItem {
   readonly scoreComplete: boolean;
   readonly recapRevision: number;
   readonly recapNotes: string | null;
+  readonly recapStructuredInput?: RecapStructuredInput | null;
+  readonly sourceAssessmentPeriod?: SourceAssessmentPeriod & { readonly label: string; readonly annualComparable: boolean };
+  readonly assessmentScope?: SourceAssessmentPeriod & { readonly label: string; readonly annualComparable: boolean };
+  readonly localResolutionResult?: LocalResolutionResult;
 }
 
 export interface PeriodRecapResponse {
@@ -28,6 +37,8 @@ export interface PeriodRecapResponse {
 }
 
 export const recapMethodLabels: Readonly<Record<string, string>> = {
+  EXPLICIT_SOURCE_ASSESSMENT: 'Asesmen sumber terpisah pada lingkup observasi eksplisit',
+  EXPLICIT_SOURCE_ASSESSMENT_REQUIRED: 'Memerlukan asesmen sumber terstruktur',
   SUM_ACTUAL_ND: 'Penjumlahan N/D aktual yang kompatibel',
   MISSING_MONTHS: 'Data bulanan belum lengkap',
   EXPLICIT_YTD: 'Rekap terpisah Januari sampai akhir periode',

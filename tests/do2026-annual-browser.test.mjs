@@ -15,7 +15,7 @@ export const state = { role: 'ADMIN_PUSKESMAS', year: 2026, month: 3, endMonth: 
   annual: true, view: 'panel', legacy: false, held: false, pauseUpload: false };
 let user = { id: 'fixture-user', role: state.role, healthCenterId: 'fixture-center' };
 export const instruction = 'Verifikasi kegiatan pemeliharaan terjadwal dan bukti pelaksanaan pada tahun yang sama. Hitung setiap kegiatan sekali sesuai jadwal yang direkonsiliasi. Konfirmasi bukan pengesahan Dinkes.';
-export function indicator(id = 'annual') {
+export function indicator(id = state.indicatorId ?? 'annual') {
   return { id, indikator: 'Indikator ' + id, do2026: {
     status: state.held ? 'UNRESOLVED_RULE' : 'IMPLEMENTED',
     reason: state.held ? 'Kelayakan kohort belum dapat dipastikan dari sumber.' : null,
@@ -34,7 +34,7 @@ export function item(id = 'annual', endMonth = state.endMonth) {
   return { indicatorId: id, indicator: indicator(id), numerator: null, denominator: null,
     measurementValue: null, measurementUnit: 'PERCENT', nilaiKinerja: null, dataComplete: false,
     scoreComplete: false, availableMonths: [], missingMonths: [], recapRevision: 0,
-    aggregationMethod: 'EXPLICIT_YTD_REQUIRED', status: 'MISSING_DATA', ...recap };
+    aggregationMethod: 'EXPLICIT_YTD_REQUIRED', status: 'MISSING_DATA', recapStructuredInput: null, ...recap };
 }
 export const pkpStore = {
   subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn); },
@@ -46,7 +46,7 @@ export const pkpStore = {
   getActivePeriod: () => ({ year: 2026 }), isActiveYear: year => state.active && year === 2026,
   canInputOwnPeriod: year => state.active && year === 2026 && state.center === user.healthCenterId,
   isPeriodLocked: (_year, month) => state.lockedMonths.includes(month), isMutating: () => false,
-  getAssignments: () => state.assigned ? { annual: user.id, existing: user.id } : {},
+  getAssignments: () => state.assigned ? { [state.indicatorId ?? 'annual']: user.id, existing: user.id } : {},
   getIndicators: () => [indicator(), indicator('existing')],
   uploadEvidence: async (file, month) => {
     uploads.push({ name: file.name, month });
@@ -241,6 +241,34 @@ test('annual-only DO frontend with isolated browser fixtures', async t => {
         const result = page.getByRole('region', { name: 'Hasil rekap indikator' });
         assert.equal(await result.locator('dd').nth(2).innerText(), '80%');
         assert.equal(await result.locator('dd').nth(3).innerText(), '-');
+      }));
+    }
+
+    for (const indicatorId of ['K5-R38', 'K1-R40', 'K2-R44', 'K1-R39', 'K4-R16', 'K4-R20']) {
+      for (const role of ['ADMIN_PUSKESMAS', 'PIC']) {
+        for (const month of [3, 12]) {
+          await t.test(`${role} cannot write/upload structured ${indicatorId} monthly with missing metadata flags in month ${month}`, () => fixture({ indicatorId, role, month, view: 'monthly' }, async page => {
+            await page.getByRole('dialog', { name: 'Input DO 2026', exact: true }).waitFor();
+            assert.equal(await page.getByRole('button', { name: 'Simpan', exact: true }).isDisabled(), true);
+            assert.equal(await page.getByLabel('Lampirkan bukti dukung', { exact: true }).isDisabled(), true);
+            await forceSubmit(page);
+            await page.getByRole('alert').filter({ hasText: /Input V2 bulanan tidak tersedia/ }).waitFor();
+            await noWrites(page);
+          }));
+        }
+      }
+      await t.test(`${indicatorId} identity guard preserves V1 editing and reversible conversion`, () => fixture({ indicatorId, view: 'monthly', legacy: true }, async page => {
+        await page.getByLabel('Realisasi V1', { exact: true }).fill('7');
+        await page.getByRole('checkbox').check();
+        assert.equal(await page.getByRole('button', { name: 'Simpan dan konversi', exact: true }).isDisabled(), true);
+        await forceSubmit(page);
+        await noWrites(page);
+        await page.getByRole('checkbox').uncheck();
+        assert.equal(await page.getByLabel('Realisasi V1', { exact: true }).inputValue(), '7');
+        await page.getByRole('button', { name: 'Simpan', exact: true }).click();
+        assert.deepEqual(await page.evaluate(() => window.annualFixture.writes), [
+          { kind: 'monthly', args: [indicatorId, 3, { pencapaianRiil: 7, notes: 'Sumber tersimpan' }, 2026] },
+        ]);
       }));
     }
 

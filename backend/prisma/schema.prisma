@@ -292,6 +292,7 @@ model PeriodRecap {
   numerator      Decimal      @db.Decimal(14, 4)
   denominator    Decimal      @db.Decimal(14, 4)
   notes          String
+  structuredInput Json?       @db.JsonB
   confirmed      Boolean
   revision       Int          @default(1)
   scoringVersion String       @default("DO_2026_V2")
