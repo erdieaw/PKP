@@ -64,6 +64,23 @@ services:
       - traefik.http.routers.sipkp-fe-secure.service=sipkp-fe
       - traefik.http.services.sipkp-fe.loadbalancer.server.port=8080
 
+  # One-shot release gate, restarted by normal Compose up even if the image is unchanged.
+  # Never attach this job to the runtime command or give it seed/storage credentials.
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: migrate
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${MIGRATION_DATABASE_URL:-${DATABASE_URL:?Set DATABASE_URL for the EXISTING PostgreSQL container (database-postgresmain-hoc5kd:5432)}}
+    networks:
+      - dokploy-network
+    init: true
+    restart: 'no'
+    labels:
+      - traefik.enable=false
+
   app:
     build:
       context: ./backend
@@ -77,6 +94,8 @@ services:
         ipv4_address: ${PKP_BACKEND_PROXY_IP:-172.30.92.3}
       data:
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     healthcheck:
@@ -112,7 +131,7 @@ services:
     labels:
       - traefik.enable=false
 
-  # Explicit operator jobs only; never started by the normal deployment.
+  # Other operator jobs (including seed) stay explicit, outside normal deployment.
   ops:
     profiles: ['tools']
     build:

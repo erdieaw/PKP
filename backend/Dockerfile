@@ -6,6 +6,11 @@ RUN npm ci
 COPY prisma ./prisma
 RUN npm run prisma:generate
 
+FROM dependencies AS migrate
+ENV NODE_ENV=production
+USER node
+CMD ["npm", "run", "db:deploy"]
+
 FROM dependencies AS ops
 COPY scripts/init-storage.mjs ./scripts/init-storage.mjs
 USER node

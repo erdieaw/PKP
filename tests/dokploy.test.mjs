@@ -24,7 +24,7 @@ const env = {
 
 function config(overrides = {}) {
   return spawnSync('docker', ['compose', '--env-file', '/dev/null', '-f', 'compose.dokploy.yml',
-    '--profile', 'tools', 'config', '--format', 'json'], {
+    '--profile', 'tools', 'config', '--no-env-resolution', '--format', 'json'], {
     cwd, env: { ...env, ...overrides }, encoding: 'utf8',
   });
 }
@@ -38,12 +38,21 @@ test('Dokploy routes only frontend, requires private external storage, and prese
     assert.equal(service.ports, undefined);
     assert.equal(service.container_name, undefined);
   }
-  assert.deepEqual(Object.keys(services).sort(), ['app', 'frontend', 'ops', 'redis']);
-  const { frontend, app, redis, ops } = services;
+  assert.deepEqual(Object.keys(services).sort(), ['app', 'frontend', 'migrate', 'ops', 'redis']);
+  const { frontend, app, redis, ops, migrate } = services;
   assert.equal(frontend.build.target, 'dokploy');
   assert.equal(app.build.target, 'runtime');
   assert.equal(ops.build.target, 'ops');
   assert.deepEqual(ops.profiles, ['tools']);
+  assert.equal(migrate.build.target, 'migrate');
+  assert.equal(migrate.profiles, undefined);
+  assert.equal(migrate.restart, 'no');
+  assert.equal(migrate.init, true);
+  assert.equal(migrate.depends_on, undefined);
+  assert.deepEqual(Object.keys(migrate.environment).sort(), ['DATABASE_URL', 'NODE_ENV']);
+  assert.equal(migrate.environment.DATABASE_URL, env.DATABASE_URL);
+  assert.equal(migrate.environment.NODE_ENV, 'production');
+  assert.deepEqual(Object.keys(migrate.networks), ['dokploy-network']);
   assert.equal(frontend.environment.NGINX_ENVSUBST_FILTER, '^TRAEFIK_TRUSTED_PROXY');
   assert.deepEqual(Object.keys(frontend.environment).sort(), ['NGINX_ENVSUBST_FILTER', 'TRAEFIK_TRUSTED_PROXY']);
   assert.equal(frontend.networks.proxy.ipv4_address, app.environment.TRUSTED_PROXY_IPS);
@@ -68,7 +77,9 @@ test('Dokploy routes only frontend, requires private external storage, and prese
   assert.equal(app.environment.TURNSTILE_REQUIRED, 'true');
   assert.equal(app.environment.TURNSTILE_SITE_KEY, env.TURNSTILE_SITE_KEY);
   assert.equal(app.environment.TURNSTILE_SECRET_KEY, env.TURNSTILE_SECRET_KEY);
-  assert.deepEqual(Object.keys(app.depends_on).sort(), ['redis']);
+  assert.deepEqual(Object.keys(app.depends_on).sort(), ['migrate', 'redis']);
+  assert.equal(app.depends_on.migrate.condition, 'service_completed_successfully');
+  assert.equal(app.depends_on.migrate.required, true);
   assert.equal(app.depends_on.redis.condition, 'service_healthy');
   assert.deepEqual(Object.keys(ops.networks), ['data', 'dokploy-network']);
   assert.equal(ops.depends_on, undefined);
@@ -87,6 +98,30 @@ test('Dokploy routes only frontend, requires private external storage, and prese
   // Compose can omit unused volumes from normalized output; the source must retain it.
   assert.match(source, /^  minio_data:\s*$/m);
   assert.doesNotMatch(source, /MINIO_ROOT_|MINIO_PUBLIC_ENDPOINT|PKP_STORAGE_DOMAIN|sipkp-storage/);
+});
+
+test('migration role is isolated from runtime and only migrate deploy runs automatically', () => {
+  const url = 'postgresql://fixture_migrator:fixture-only@database-postgresmain-hoc5kd:5432/sipkp?schema=public';
+  for (const override of ['', undefined, url]) {
+    const result = config({ MIGRATION_DATABASE_URL: override });
+    assert.equal(result.status, 0, result.stderr);
+    const { services } = JSON.parse(result.stdout);
+    assert.equal(services.migrate.environment.DATABASE_URL, override || env.DATABASE_URL);
+    assert.equal(services.app.environment.DATABASE_URL, env.DATABASE_URL);
+    assert.equal(services.ops.environment.DATABASE_URL, env.DATABASE_URL);
+    assert.equal(services.app.environment.MIGRATION_DATABASE_URL, undefined);
+  }
+  const dockerfile = readFileSync(new URL('../backend/Dockerfile', import.meta.url), 'utf8');
+  const migrationStage = dockerfile.split('FROM dependencies AS migrate\n')[1]?.split('\nFROM ')[0];
+  assert.ok(migrationStage);
+  assert.match(migrationStage, /USER node/);
+  assert.match(migrationStage, /CMD \["npm", "run", "db:deploy"\]/);
+  assert.doesNotMatch(migrationStage, /seed|db push|migrate (dev|reset)|init-storage|COPY.*src/);
+  const runtimeStage = dockerfile.split(' AS runtime\n')[1];
+  assert.match(runtimeStage, /CMD \["node", "dist\/src\/main.js"\]/);
+  assert.doesNotMatch(runtimeStage, /db:deploy|db:seed|migrate deploy/);
+  const pkg = JSON.parse(readFileSync(new URL('../backend/package.json', import.meta.url), 'utf8'));
+  assert.equal(pkg.scripts['db:deploy'], 'prisma migrate deploy');
 });
 
 test('Dokploy refuses missing required values and domain/IP overrides stay consistent', () => {
