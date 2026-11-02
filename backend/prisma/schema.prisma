@@ -63,6 +63,7 @@ model HealthCenter {
   annualTargets   AnnualTarget[]
   picAssignments  PicAssignment[]
   monthlyRecords  MonthlyRecord[]
+  monthlyObservations MonthlyObservation[]
   periodRecaps    PeriodRecap[]
   periodLocks     PeriodLock[]
   uploads         Upload[]
@@ -99,6 +100,7 @@ model User {
   exportJobs      ExportJob[]
 
   updatedRecaps   PeriodRecap[]
+  updatedObservations MonthlyObservation[]
 
   @@index([healthCenterId, role])
   @@map("users")
@@ -128,6 +130,7 @@ model YearPeriod {
   annualTargets   AnnualTarget[]
   picAssignments  PicAssignment[]
   monthlyRecords  MonthlyRecord[]
+  monthlyObservations MonthlyObservation[]
   periodRecaps    PeriodRecap[]
   periodLocks     PeriodLock[]
   recommendations Recommendation[]
@@ -183,6 +186,7 @@ model Indicator {
   annualTargets        AnnualTarget[]
   picAssignments       PicAssignment[]
   monthlyRecords       MonthlyRecord[]
+  monthlyObservations  MonthlyObservation[]
   periodRecaps         PeriodRecap[]
   provinceMappings     ProvinceMapping[]
 
@@ -280,6 +284,40 @@ model MonthlyRecord {
   @@map("monthly_records")
 }
 
+// Raw monthly declarations only. Never consumed by scoring or recap aggregation.
+model MonthlyObservation {
+  id                String       @id @default(uuid()) @db.Uuid
+  healthCenterId    String       @db.Uuid
+  healthCenter      HealthCenter @relation(fields: [healthCenterId], references: [id], onDelete: Restrict)
+  indicatorId       String
+  indicator         Indicator    @relation(fields: [indicatorId], references: [id], onDelete: Restrict)
+  year              Int
+  yearPeriod        YearPeriod   @relation(fields: [year], references: [year], onDelete: Restrict)
+  month             Int
+  revision          Int          @default(1)
+  kind              String
+  status            String
+  value             Float?       @db.DoublePrecision
+  denominator       Float?       @db.DoublePrecision
+  documentAvailable Boolean?
+  unit              String?
+  notes             String?
+  sourceReference   String?
+  evidenceId        String?      @db.Uuid
+  evidence          Upload?      @relation(fields: [evidenceId], references: [id], onDelete: Restrict)
+  updatedBy         String       @db.Uuid
+  updatedByUser     User         @relation(fields: [updatedBy], references: [id], onDelete: Restrict)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  @@unique([healthCenterId, indicatorId, year, month])
+  @@index([healthCenterId, year, month])
+  @@index([year])
+  @@index([evidenceId])
+  @@index([updatedBy])
+  @@map("monthly_observations")
+}
+
 model PeriodRecap {
   id             String       @id @default(uuid()) @db.Uuid
   healthCenterId String       @db.Uuid
@@ -350,6 +388,7 @@ model Upload {
   expiresAt      DateTime
   createdAt      DateTime        @default(now())
   monthlyRecords MonthlyRecord[]
+  monthlyObservations MonthlyObservation[]
 
   @@index([healthCenterId, year, month])
   @@index([userId])

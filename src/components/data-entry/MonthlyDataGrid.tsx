@@ -31,6 +31,8 @@ import { ScoreBadge } from '../common/ScoreBadge';
 import { confirmDiscardChanges, useUnsavedChanges } from '../common/useUnsavedChanges';
 import { Do2026Editor } from './Do2026Editor';
 import { measurementText } from '../../types/do2026';
+import { defaultsToObservation } from '../../types/monthlyObservation';
+import { MonthlyObservationAction, MonthlyObservationEditor, MonthlyObservationsLoad } from './MonthlyObservationEditor';
 
 interface MonthlyDataGridProps {
   selectedMonth: number;
@@ -55,6 +57,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
 
   const [searchQuery, setSearchQuery] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [observationId, setObservationId] = useState<string | null>(null);
   const [tempValue, setTempValue] = useState<string>('');
   const [originalValue, setOriginalValue] = useState<string>('');
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
@@ -75,6 +78,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
   const centerName = pkpStore.getSelectedHealthCenter()?.name ?? 'Belum memilih Puskesmas';
   useEffect(() => {
     setEditingId(null);
+    setObservationId(null);
     setTempValue('');
     setError(null);
   }, [currentYear, selectedMonth, selectedQuarter, selectedKlaster, periodViewMode, selectedCenter]);
@@ -139,8 +143,9 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
   });
 
   const discardEditing = () => {
-    if (pending || !confirmDiscardChanges('monthly-grid')) return false;
+    if (pending || pkpStore.isMutating() || !confirmDiscardChanges('monthly-grid')) return false;
     setEditingId(null);
+    setObservationId(null);
     setTempValue('');
     setError(null);
     return true;
@@ -172,6 +177,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
       return;
     }
     if (!discardEditing()) return;
+    if (defaultsToObservation(ind)) { setObservationId(ind.id); return; }
     setEditingId(ind.id);
     setTempValue(currentVal?.toString() ?? '');
     setOriginalValue(currentVal?.toString() ?? '');
@@ -287,6 +293,11 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
       </div>
       <PeriodRecapPanel key={`${currentYear}:${selectedCenter}:${selectedMonth}`} year={currentYear} month={selectedMonth} />
       <p className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">DO 2026 masih provisional: skor yang tersedia berasal dari rubrik sumber; kategori dan rekap resmi belum disahkan. Tampilan bulanan dapat memuat observasi YTD berlabel kumulatif, bukan capaian bulan mandiri.</p>
+      <p className="text-xs text-slate-600">Semua indikator dapat dicatat tiap bulan melalui Observasi / catatan bulanan. Observasi mentah terpisah dari realisasi dan skor lama, tanpa penilaian tahunan otomatis.</p>
+      {!isQuarterMode && <MonthlyObservationsLoad key={`${currentUser?.id}:${currentYear}:${selectedMonth}:${selectedCenter}`} year={currentYear} month={selectedMonth} />}
+      {observationId && !isQuarterMode && indicators.filter(ind => ind.id === observationId).map(ind => (
+        <MonthlyObservationEditor key={`${ind.id}:${currentYear}:${selectedMonth}:${selectedCenter}`} indicator={ind} year={currentYear} month={selectedMonth} onClose={() => setObservationId(null)} />
+      ))}
       {editingId && !isQuarterMode && indicators.filter(ind => ind.id === editingId && ind.do2026).map(ind => (
         <Do2026Editor key={`${ind.id}:${currentYear}:${selectedMonth}:${selectedCenter}`}
           indicator={ind} record={pkpStore.getMonthlyRecord(ind.id, selectedMonth)} year={currentYear} month={selectedMonth}
@@ -766,6 +777,9 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
                               </p>
                               <p className="mt-1 text-[11px] font-medium text-emerald-700">Lihat definisi operasional →</p>
                             </div>
+                            {!isQuarterMode && <MonthlyObservationAction key={`${currentYear}:${selectedCenter}:${selectedMonth}:${ind.id}`} indicator={ind} year={currentYear} month={selectedMonth} />}
+                            {!isQuarterMode && defaultsToObservation(ind) && <button type="button" disabled={!canEdit(ind.id) || pkpStore.isMutating()}
+                              onClick={() => { if (discardEditing()) setEditingId(ind.id); }} className="mt-1 min-h-9 text-xs text-slate-600 underline disabled:opacity-50">Editor perhitungan lama</button>}
                           </td>
 
                           {/* Target % */}
@@ -792,7 +806,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
                           {/* REALISASI CELL */}
                           <td 
                             role="button" tabIndex={canEdit(ind.id) ? 0 : -1} aria-disabled={!canEdit(ind.id) || pending}
-                            aria-label={`${inputBlockReason ? 'Realisasi' : 'Edit realisasi'} ${officialCode}, ${periodLabel}, ${centerName}${inputBlockReason ? `, hanya baca: ${inputBlockReason}` : ''}`}
+                            aria-label={`${!isQuarterMode && defaultsToObservation(ind) ? 'Input observasi' : inputBlockReason ? 'Realisasi' : 'Edit realisasi'} ${officialCode}, ${periodLabel}, ${centerName}${inputBlockReason ? `, hanya baca: ${inputBlockReason}` : ''}`}
                             onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); handleStartEdit(ind, rec.pencapaianRiil); } }}
                             onClick={() => handleStartEdit(ind, rec.pencapaianRiil)}
                             className={`py-2 px-3 text-right align-middle border-r border-slate-200 transition-colors ${
@@ -838,6 +852,7 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
                               </div>
                             )}
                             {inputBlockReason && <p className="mt-1 text-[10px] font-normal text-slate-600">{isQuarterMode || monthlyBlockReason ? 'Hanya baca' : inputBlockReason}</p>}
+                            {!isQuarterMode && defaultsToObservation(ind) && <p className="mt-1 text-[10px] font-normal text-emerald-800">Catat observasi bulan ini</p>}
                           </td>
 
                           {/* Capaian Riil % */}

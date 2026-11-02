@@ -26,6 +26,8 @@ import { Do2026Editor } from '../data-entry/Do2026Editor';
 import { EvidencePreviewDialog } from '../common/EvidencePreviewDialog';
 import { confirmDiscardChanges, useUnsavedChanges } from '../common/useUnsavedChanges';
 import { getMonthlyInputBlockReason, monthPeriodLabel } from '../../services/inputPeriod';
+import { MonthlyObservationAction, MonthlyObservationEditor } from '../data-entry/MonthlyObservationEditor';
+import { defaultsToObservation } from '../../types/monthlyObservation';
 
 interface IndicatorDetailDrawerProps {
   indicator: OfficialIndicator | null;
@@ -51,6 +53,7 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [editingScope, setEditingScope] = useState<string | null>(null);
+  const [observationScope, setObservationScope] = useState<string | null>(null);
   const [previewScope, setPreviewScope] = useState<string | null>(null);
   const [baseline, setBaseline] = useState('');
   const generation = useRef(0);
@@ -102,8 +105,9 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
   const blockReason = inspectionQuarter ? 'Hanya baca: rincian kumulatif triwulan. Gunakan tampilan Bulanan untuk mengisi bulan tertentu.'
     : getMonthlyInputBlockReason(year, selectedMonth, indicator.id);
   const canEditPeriod = !blockReason && !isHead;
-  const canEdit = !requiresDoEditor && canEditPeriod;
   const scopeKey = `${indicator.id}:${year}:${selectedMonth}:${center}:${inspectionQuarter ?? 'month'}`;
+  const observationPrimary = defaultsToObservation(indicator);
+  const canEdit = !requiresDoEditor && canEditPeriod && (!observationPrimary || editingScope === scopeKey);
   const periodLabel = inspectionQuarter ? `Kumulatif Januari sampai ${monthPeriodLabel(year, inspectionQuarter * 3)} (TW ${inspectionQuarter})`
     : monthPeriodLabel(year, selectedMonth);
   const currentEvidenceId = inspectionQuarter ? null : requiresDoEditor ? rec.evidenceId : evidenceId;
@@ -412,6 +416,13 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
                 <div><dt>Realisasi kumulatif (N)</dt><dd className="font-mono font-bold">{rec.pencapaianRiil ?? '-'}</dd></div>
                 <div><dt>{requiresDoEditor ? 'Penyebut rekap (D)' : 'Capaian kumulatif (%)'}</dt><dd className="font-mono font-bold">{requiresDoEditor ? rec.totalSasaran ?? '-' : rec.capaianRiilPct ?? '-'}</dd></div>
               </dl>
+            ) : observationPrimary && editingScope !== scopeKey ? (
+              <div className="space-y-3">
+                <p>Catat observasi mentah bulan ini secara terpisah. Isian ini tidak mengubah perhitungan lama atau rekap.</p>
+                <button disabled={!canEditPeriod || pending} onClick={() => setObservationScope(scopeKey)}
+                  className="rounded-lg bg-emerald-600 px-4 py-2 font-semibold text-white disabled:opacity-50">Catat observasi dan bukti bulanan</button>
+                <button disabled={!canEditPeriod || pending} onClick={() => setEditingScope(scopeKey)} className="block min-h-9 text-slate-600 underline">Editor perhitungan lama</button>
+              </div>
             ) : requiresDoEditor ? (
               <div className="space-y-3">
                 <dl className="grid grid-cols-2 gap-3">
@@ -498,6 +509,8 @@ export const IndicatorDetailDrawer: React.FC<IndicatorDetailDrawerProps> = ({
             )}
           </div>
 
+          {!isHead && !inspectionQuarter && <MonthlyObservationAction key={`observation:${scopeKey}`} indicator={indicator} year={year} month={selectedMonth} />}
+          {observationScope === scopeKey && <MonthlyObservationEditor key={`observation:${scopeKey}`} indicator={indicator} year={year} month={selectedMonth} onClose={() => setObservationScope(null)} />}
           {requiresDoEditor && editingScope === scopeKey && <Do2026Editor key={scopeKey}
             indicator={indicator} record={rec} year={year} month={selectedMonth} canEdit={canEditPeriod}
             onClose={() => setEditingScope(null)} />}

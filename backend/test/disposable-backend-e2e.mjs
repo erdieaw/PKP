@@ -8,7 +8,9 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const backend = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const do2026 = process.argv.includes('--do2026');
-assert.ok(process.argv.slice(2).every(arg => arg === '--do2026'), 'Only --do2026 is supported');
+const observations = process.argv.includes('--monthly-observations');
+assert.ok(process.argv.slice(2).every(arg => ['--do2026', '--monthly-observations'].includes(arg)), 'Unsupported suite');
+assert.ok(!(do2026 && observations), 'Select one suite');
 const project = `pkp-e2e-${randomUUID()}`;
 const label = 'pkp.disposable-e2e';
 const names = ['pg', 'redis', 'minio'].map(service => `${project}-${service}`);
@@ -29,8 +31,8 @@ const env = {
   SEED_DEMO: 'false', BOOTSTRAP_ADMIN_USERNAME: '', BOOTSTRAP_ADMIN_PASSWORD: '',
   EVIDENCE_BUCKET: 'evidence-e2e', REPORTS_BUCKET: 'reports-e2e',
   MINIO_ACCESS_KEY: `e2e${randomBytes(6).toString('hex')}`, MINIO_SECRET_KEY: secret(),
-  POSTGRES_USER: 'e2e', POSTGRES_PASSWORD: secret(), POSTGRES_DB: do2026 ? 'pkp_do_qa' : 'pkp_disposable_e2e',
-  TEST_E2E: 'false', TEST_DO_E2E: 'false',
+  POSTGRES_USER: 'e2e', POSTGRES_PASSWORD: secret(), POSTGRES_DB: observations ? 'pkp_monthly_observations_qa' : do2026 ? 'pkp_do_qa' : 'pkp_disposable_e2e',
+  TEST_E2E: 'false', TEST_DO_E2E: 'false', TEST_MONTHLY_OBSERVATIONS_E2E: 'false',
   TEST_DISPOSABLE_STORAGE_PROJECT: project, TEST_STORAGE_S3: 'false', NO_COLOR: '1',
 };
 env.MINIO_ROOT_USER = env.MINIO_ACCESS_KEY;
@@ -100,14 +102,14 @@ try {
   await copyFile(join(backend, 'prisma/schema.prisma'), join(temporary, 'schema.prisma'));
   await cp(join(backend, 'prisma/migrations'), join(temporary, 'migrations'), { recursive: true });
   run(process.execPath, [join(backend, 'node_modules/prisma/build/index.js'), 'migrate', 'deploy', '--schema', join(temporary, 'schema.prisma')], { cwd: temporary });
-  run('npm', ['run', 'db:seed']);
+  if (!observations) run('npm', ['run', 'db:seed']);
   run(process.execPath, ['scripts/init-storage.mjs']);
   run(process.execPath, ['--import', 'tsx', '--test', '--test-name-pattern=real MinIO', 'test/storage-gateway.test.ts'], { env: { ...env, TEST_STORAGE_S3: 'true' } });
-  const suites = do2026 ? ['do2026', 'period-recaps'] : ['backend'];
+  const suites = observations ? ['monthly-observations'] : do2026 ? ['do2026', 'period-recaps'] : ['backend'];
   run(process.execPath, ['--test', '--test-concurrency=1', ...suites.map(suite => `dist-test/test/${suite}.e2e.js`)], {
-    env: { ...env, TEST_E2E: String(!do2026), TEST_DO_E2E: String(do2026) },
+    env: { ...env, TEST_E2E: String(!do2026 && !observations), TEST_DO_E2E: String(do2026), TEST_MONTHLY_OBSERVATIONS_E2E: String(observations) },
   });
-  console.log(`Disposable ${do2026 ? 'DO2026' : 'backend'} E2E passed against real Postgres, Redis and MinIO.`);
+  console.log(`Disposable ${observations ? 'monthly observations' : do2026 ? 'DO2026' : 'backend'} E2E passed against real Postgres, Redis and MinIO.`);
 } catch (error) {
   console.error(error.message);
   const logs = spawnSync('docker', ['logs', pg], { env, encoding: 'utf8', timeout: 10000 });

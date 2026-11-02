@@ -130,6 +130,7 @@ test('input period through real AppLayout, Header, grid and drawer (isolated API
           data = { month: Number(query.get('month')), items: indicators.map(ind =>
             record(ind.id, (Number(query.get('month')) === 8 ? 808 : 17) + scopeOffset)) };
         }
+         else if (path === '/records/monthly-observations') data = { items: [] };
          else if (path === '/analytics/annual-trend') data = { subKlasters: [{ code: '5.1',
            monthlyScores: Array(12).fill(50), indicatorCount: indicators.length }] };
          else if (path === '/analytics/period-recap') data = { items: [{
@@ -373,6 +374,7 @@ test('input period through real AppLayout, Header, grid and drawer (isolated API
         assert.equal(await centerSelect(page).inputValue(), 'center-b');
         assert.equal(await monthSelect(page).inputValue(), '8');
         await details(page).click();
+        await page.waitForFunction(() => document.querySelector('input[aria-label="Realisasi fisik"]')?.value === '1008');
         assert.equal(await draft.inputValue(), '1008', 'New tenant data must replace the old tenant draft and record');
         await drawer(page).getByText('Puskesmas: Kenanga Fixture', { exact: true }).waitFor();
       } finally { await f.close(); }

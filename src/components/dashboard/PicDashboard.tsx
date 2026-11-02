@@ -12,6 +12,7 @@ import { PolarityBadge } from '../common/PolarityBadge';
 import { OfficialIndicator } from '../../types/pkp';
 import { measurementText } from '../../types/do2026';
 import { PeriodRecapPanel } from '../data-entry/PeriodRecapPanel';
+import { MonthlyObservationAction, MonthlyObservationsLoad } from '../data-entry/MonthlyObservationEditor';
 
 interface PicDashboardProps {
   selectedMonth: number;
@@ -78,7 +79,8 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
   });
 
   const totalAssigned = itemsWithRecord.length;
-  const submittedCount = itemsWithRecord.filter(({ record }) => !record.isMissing && typeof record.pencapaianRiil === 'number' && Number.isFinite(record.pencapaianRiil)).length;
+  const observationsKnown = pkpStore.getMonthlyObservationsLoad(selectedMonth, currentYear)?.status === 'loaded';
+  const submittedCount = itemsWithRecord.filter(({ indicator, record }) => pkpStore.getMonthlyObservation(indicator.id, selectedMonth) || (!record.isMissing && typeof record.pencapaianRiil === 'number' && Number.isFinite(record.pencapaianRiil))).length;
   const scores = itemsWithRecord.flatMap(({ record }) => !record.isMissing && typeof record.nilaiKinerja === 'number' && Number.isFinite(record.nilaiKinerja) ? [record.nilaiKinerja] : []);
   const avgScore = scores.length ? scores.reduce((sum, score) => sum + score, 0) / scores.length : null;
 
@@ -122,8 +124,9 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
 
   if (currentUser.role === 'PIC') {
     const locked = !pkpStore.canInputOwnPeriod(currentYear) || periodLocked;
-    const visibleItems = itemsWithRecord.filter(({ record }) => {
-      const filled = !record.isMissing && typeof record.pencapaianRiil === 'number' && Number.isFinite(record.pencapaianRiil);
+    const visibleItems = itemsWithRecord.filter(({ indicator, record }) => {
+      if (!observationsKnown) return true;
+      const filled = Boolean(pkpStore.getMonthlyObservation(indicator.id, selectedMonth)) || (!record.isMissing && typeof record.pencapaianRiil === 'number' && Number.isFinite(record.pencapaianRiil));
       return inputFilter === 'all' || (inputFilter === 'filled' ? filled : !filled);
     });
     return (
@@ -137,14 +140,16 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
         {load.error && <p role="alert" className="rounded-lg bg-rose-50 p-4 text-sm text-rose-800">{load.error.message}</p>}
         {load.loading && <p role="status" className="text-sm text-slate-600">Memuat indikator Anda...</p>}
         {readOnlyNotice}
+        <p className="text-sm text-slate-600">Semua indikator menerima observasi atau catatan bulanan, tanpa skor atau rekap otomatis. Isian perhitungan lama tetap terpisah.</p>
+        <MonthlyObservationsLoad key={`${currentUser.id}:${currentYear}:${selectedMonth}:${healthCenter?.id}`} year={currentYear} month={selectedMonth} />
         <PeriodRecapPanel key={`${healthCenter?.id}:${currentYear}:${selectedMonth}`} year={currentYear} month={selectedMonth} />
         <div className="flex flex-wrap gap-2" role="group" aria-label="Filter status pengisian">
           {([
             ['all', 'Semua', totalAssigned],
-            ['missing', 'Belum diisi', totalAssigned - submittedCount],
-            ['filled', 'Sudah diisi', submittedCount],
+            ['missing', 'Belum diisi', observationsKnown ? totalAssigned - submittedCount : '?'],
+            ['filled', 'Sudah diisi', observationsKnown ? submittedCount : '?'],
           ] as const).map(([value, label, count]) => (
-            <button key={value} aria-pressed={inputFilter === value} onClick={() => setInputFilter(value)} className={`min-h-11 rounded-lg border px-4 py-2 text-sm font-medium ${inputFilter === value ? 'border-emerald-700 bg-emerald-700 text-white' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100'}`}>
+            <button key={value} disabled={value !== 'all' && !observationsKnown} aria-pressed={inputFilter === value} onClick={() => setInputFilter(value)} className={`min-h-11 rounded-lg border px-4 py-2 text-sm font-medium disabled:opacity-50 ${inputFilter === value ? 'border-emerald-700 bg-emerald-700 text-white' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100'}`}>
               {label} ({count})
             </button>
           ))}
@@ -153,15 +158,17 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
         <ul className="divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white">
           {visibleItems.map(({ indicator, record, monthlyTarget, isV2, isYtd, basisLabel }) => {
             const filled = !record.isMissing && typeof record.pencapaianRiil === 'number' && Number.isFinite(record.pencapaianRiil);
+            const observed = Boolean(pkpStore.getMonthlyObservation(indicator.id, selectedMonth));
             return (
               <li key={indicator.id} className="p-4 sm:p-5" data-indicator-id={indicator.id}>
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
                   <span className="font-mono text-slate-500">{indicator.sectionCode}.{indicator.no.replace('.', '')}</span>
-                  <span className={filled ? 'font-medium text-emerald-700' : 'font-medium text-amber-800'}>{filled ? 'Sudah diisi' : 'Belum diisi'}</span>
+                  <span className={filled || observed ? 'font-medium text-emerald-700' : 'font-medium text-amber-800'}>{filled ? 'Sudah diisi' : observed ? 'Observasi dicatat' : observationsKnown ? 'Belum diisi' : 'Status pengisian belum diketahui'}</span>
                 </div>
                 <h2 className="mt-2 break-words text-base font-semibold text-slate-900">{indicator.indikator}</h2>
                 <p className="mt-1 break-words text-sm text-slate-500">{indicator.kegiatan}</p>
                 <p className={`mt-2 text-sm ${isYtd ? 'text-amber-900' : 'text-slate-600'}`}>{basisLabel}</p>
+                <MonthlyObservationAction key={`${currentYear}:${healthCenter?.id}:${selectedMonth}:${indicator.id}`} indicator={indicator} year={currentYear} month={selectedMonth} />
                 <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
                   <dl className="flex flex-wrap gap-x-8 gap-y-3 text-sm">
                     <div><dt className="text-slate-500">{isV2 ? 'Penyebut aktual (D)' : 'Target prorata / bulan (V1)'}</dt><dd className="mt-1 font-medium text-slate-800">{isV2 ? record.totalSasaran?.toLocaleString('id-ID') ?? 'Belum diisi' : monthlyTarget === null ? 'Belum ditetapkan' : `${monthlyTarget.toLocaleString('id-ID', { maximumFractionDigits: 1 })} ${indicator.satuan}`}
@@ -220,7 +227,7 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
             ))}
           </select>
 
-          {currentUser.role === 'ADMIN_PUSKESMAS' && activePic?.phone && (
+          {currentUser.role === 'ADMIN_PUSKESMAS' && activePic?.phone && observationsKnown && submittedCount < totalAssigned && (
             <a
               href={generateWaReminder()}
               target="_blank"
@@ -235,6 +242,8 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
         </div>
       </div>
       {readOnlyNotice}
+      <p className="text-sm text-slate-600">Status input mencakup observasi mentah atau isian angka, bukan kelengkapan penilaian. Observasi tidak mengubah skor atau rekap.</p>
+      <MonthlyObservationsLoad key={`${currentUser.id}:${currentYear}:${selectedMonth}:${healthCenter?.id}`} year={currentYear} month={selectedMonth} />
 
       {/* KPI Cards Row */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
@@ -247,10 +256,10 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
           <span className="text-[11px] font-semibold text-slate-500 uppercase">Status Input</span>
           <div className="text-2xl font-bold font-mono text-emerald-600 mt-1">
-            {submittedCount} <span className="text-sm font-sans font-normal text-slate-400">/ {totalAssigned}</span>
+            {observationsKnown ? submittedCount : '?'} <span className="text-sm font-sans font-normal text-slate-400">/ {totalAssigned}</span>
           </div>
           <span className="text-[11px] text-emerald-600 font-medium">
-            {totalAssigned > 0 ? `${Math.round((submittedCount / totalAssigned) * 100)}%` : '-'} Terisi
+            {observationsKnown ? `${totalAssigned > 0 ? `${Math.round((submittedCount / totalAssigned) * 100)}%` : '-'} Terisi` : 'Status pengisian belum diketahui'}
           </span>
         </div>
 
@@ -342,6 +351,7 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
                         {indicator.kegiatan} • <span className="font-mono text-slate-400">{indicator.section}</span>
                       </p>
                       <p className="mt-2 text-[11px] text-slate-600">{basisLabel}</p>
+                      <MonthlyObservationAction key={`${currentYear}:${healthCenter?.id}:${selectedMonth}:${indicator.id}`} indicator={indicator} year={currentYear} month={selectedMonth} />
                       {record.notes && (
                         <p className="text-[11px] text-amber-700 bg-amber-50 rounded px-2 py-0.5 mt-1 border border-amber-200/60 inline-flex items-center gap-1">
                           <MessageSquare className="w-3 h-3 text-amber-600" />
