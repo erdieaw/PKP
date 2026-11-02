@@ -1,12 +1,14 @@
 import { MANAGEMENT_RULES } from './reviewed-management';
 import { CLINICAL_RULES } from './reviewed-clinical';
 import { INFECTIOUS_CROSS_RULES } from './reviewed-infectious-cross';
+import type { StructuredInputKind } from './structured-input';
 
 export type LiteralBand = {
   readonly min: number; readonly max: number | null;
   readonly minInclusive: boolean; readonly maxInclusive: boolean; readonly score: number;
 };
 export type DoRule = {
+  readonly structuredInputKind?: StructuredInputKind;
   readonly annualRecapOnly?: true;
   readonly sourceRef?: string;
   readonly assessmentNote?: string;
@@ -18,6 +20,7 @@ export type DoRule = {
     | { readonly kind: 'THRESHOLD'; readonly maximum: number }
     | { readonly kind: 'BANDS'; readonly bands: readonly LiteralBand[] }
     | { readonly kind: 'COVERAGE'; readonly target: number }
+    | { readonly kind: 'FREQUENCY_MINIMUM'; readonly minimum: number }
     | { readonly kind: 'ATTAINMENT'; readonly limit: number; readonly direction: 'MAX' | 'MIN' }
     | { readonly kind: 'DOCUMENT' };
 };
@@ -42,6 +45,54 @@ export const DO_RULES: Readonly<Record<string, DoRule>> = {
   ...MANAGEMENT_RULES,
   ...CLINICAL_RULES,
   ...INFECTIOUS_CROSS_RULES,
+  'K2-R44': {
+    annualRecapOnly: true, structuredInputKind: 'LROA_ANNUAL',
+    sourceRef: 'S1:KLASTER 2!A43:I43', unit: 'PERCENT', denominatorInput: 'INTEGER', fixedDenominator: 4,
+    numeratorLabel: 'Triwulan dengan tiga bulan laporan lengkap dan minimal dua kategori kegiatan positif setiap bulan',
+    denominatorLabel: 'Empat triwulan tahun rekap (4)',
+    assessmentNote: 'Interpretasi teknis provisional dari narasi sumber: hanya TW4 lengkap berarti 25%, bukan rubrik skor resmi. Dua belas slot bulan dan keenam count layanan wajib eksplisit, termasuk bila laporan tidak ada; tidak mengarang nol. threeHourObservation hanya menghitung observasi penderita dehidrasi ringan-sedang paling sedikit tiga jam; dehydrationTreatment juga untuk dehidrasi ringan-sedang. Referensi SIHEPI/laporan PISP dan kelayakan layanan adalah attestasi, bukan validasi bukti atau identitas pasien.',
+    scoring: { kind: 'COVERAGE', target: 100 },
+  },
+  'K1-R39': {
+    annualRecapOnly: true, structuredInputKind: 'SEMESTER_SURVEY_ANNUAL',
+    sourceRef: 'S1:KLASTER I!A39:H39', unit: 'SCORE', denominatorInput: 'INTEGER', fixedDenominator: 2,
+    numeratorLabel: 'Jumlah desimal nilai survei semester I dan II pada skala 100 poin terdokumentasi',
+    denominatorLabel: 'Dua semester lengkap (2), bukan jumlah sampel',
+    assessmentNote: 'Rerata dua semester tanpa pembobotan sampel, konversi skala atau fallback bulanan. Skala 100 poin dan metode kompatibel wajib terattestasi dengan referensi; target 78 bukan bukti skala instrumen. Nilai maksimal empat desimal agar tersimpan tanpa pembulatan; hasil ukur poin bukan skor kinerja.',
+    scoring: { kind: 'ATTAINMENT', limit: 78, direction: 'MIN' },
+  },
+  'K4-R16': {
+    annualRecapOnly: true, structuredInputKind: 'TB_COHORT_ANNUAL',
+    sourceRef: 'S1:KLASTER 4!A15:J15', unit: 'PERCENT', denominatorInput: 'INTEGER',
+    numeratorLabel: 'Pasien kohort TBC Y-1 sembuh atau pengobatan lengkap, dihitung sekali',
+    denominatorLabel: 'Denominator awal semua pasien kohort Y-1 diobati, dicatat dan dilaporkan dalam SITB',
+    assessmentNote: 'Kohort Y-1 dan ketertautan hasil pada denominator awal wajib lengkap/terattestasi. Tanpa identitas pasien, penjumlahan hasil tahun berjalan atau fallback bulanan. D nol tetap unavailable, bukan nihil terverifikasi atau N/A; tidak ada skor kinerja.',
+    scoring: { kind: 'COVERAGE', target: 90 },
+  },
+  'K4-R20': {
+    annualRecapOnly: true, structuredInputKind: 'LEPROSY_COHORT_ANNUAL',
+    sourceRef: 'S1:KLASTER 4!A19:J19', unit: 'PERCENT', denominatorInput: 'INTEGER',
+    numeratorLabel: 'Jumlah selesai pengobatan sesuai periode dari kohort PB Y-1 dan MB Y-2',
+    denominatorLabel: 'Jumlah kasus baru mulai pengobatan pada kohort PB Y-1 dan MB Y-2 dalam SIPK',
+    assessmentNote: 'Dua komponen kohort matang/lengkap dengan hasil tertaut denominator awal. Jumlah N dibagi jumlah D, bukan mean dua persentase. Nol per komponen harus eksplisit; D gabungan nol tetap unavailable. Periode terapi dan referensi adalah attestasi, bukan validasi pasien/dokumen; tidak ada skor kinerja.',
+    scoring: { kind: 'COVERAGE', target: 90 },
+  },
+  'K5-R38': {
+    annualRecapOnly: true, structuredInputKind: 'PME_ANNUAL',
+    sourceRef: 'S1:LINTAS KLASTER!A37:I37', unit: 'PERCENT', denominatorInput: 'INTEGER', fixedDenominator: 2,
+    numeratorLabel: 'Jumlah keikutsertaan PME berbeda dengan referensi sertifikat/hasil dalam tahun rekap',
+    denominatorLabel: 'Minimum dua keikutsertaan PME setahun (2), bukan checklist atau jumlah kegiatan aktual',
+    assessmentNote: 'Ledger Januari-Desember wajib; daftar kosong adalah pernyataan nihil pada sumber/catatan terkonfirmasi, bukan data hilang. Referensi bukti adalah attestasi petugas, bukan validasi dokumen. Capaian dapat melebihi 100%; skor tetap null.',
+    scoring: { kind: 'FREQUENCY_MINIMUM', minimum: 2 },
+  },
+  'K1-R40': {
+    annualRecapOnly: true, structuredInputKind: 'RTM_ANNUAL',
+    sourceRef: 'S1:KLASTER I!A40:H40', unit: 'PERCENT', denominatorInput: 'INTEGER',
+    numeratorLabel: 'Jumlah rekomendasi RTM selesai dengan tanggal dan referensi tindak lanjut pada tahun yang sama',
+    denominatorLabel: 'Seluruh rekomendasi RTM dari ledger rapat tahun yang sama, bukan jumlah rapat',
+    assessmentNote: 'Minimal dua rapat berbeda setahun merupakan prasyarat terpisah dari rasio rekomendasi. Tidak memakai carryover atau tenggat buatan. Ledger kosong adalah attestasi nihil pada sumber/catatan; D nol tetap unavailable. Referensi bukan validasi bukti eksternal.',
+    scoring: { kind: 'COVERAGE', target: 100 },
+  },
   'K2-R50': { ...upper(15.04), numeratorLabel: 'Balita 0–59 bulan pendek/sangat pendek', denominatorLabel: 'Balita 0–59 bulan yang diukur PB/TB pada periode yang sama' },
   'K2-R51': { ...upper(14), numeratorLabel: 'Balita 0–59 bulan dengan BB kurang/sangat kurang', denominatorLabel: 'Balita 0–59 bulan yang ditimbang BB pada periode yang sama' },
   'K2-R52': { ...upper(8), numeratorLabel: 'Balita 0–59 bulan gizi kurang/buruk', denominatorLabel: 'Balita 0–59 bulan yang ditimbang BB dan diukur PB/TB pada periode yang sama' },

@@ -6,6 +6,7 @@ import { evaluateDataset } from './evaluation';
 import { DO_SCORING_VERSION } from './do2026/scorer';
 import { evaluateDoCumulative, type DoRecap } from './do2026/cumulative';
 import { reportingPolicy } from './reporting-policy';
+import { structuredInputKindFor } from './do2026/structured-input';
 
 type Dataset = {
   healthCenter: HealthCenter; sections: (Omit<Section, 'isActive'> & { isActive?: boolean })[]; indicators: Indicator[];
@@ -52,8 +53,8 @@ export class AnalyticsService {
       const indicators = await tx.indicator.findMany({ where: { isActive: true }, orderBy: { id: 'asc' } });
       const targets = await tx.annualTarget.findMany({ where: { healthCenterId, year } });
       const records = await tx.monthlyRecord.findMany({ where: { healthCenterId, year, month: isQuarter ? { lte: periodNumber * 3, gte: 1 } : periodNumber } });
-      const recaps = isQuarter ? await tx.periodRecap.findMany({ where: { healthCenterId, year, endMonth: { lte: periodNumber * 3 } } }) : [];
-      return { healthCenter, sections, indicators, targets, records, recaps, source: 'LIVE_DATABASE', status: lock?.status ?? 'DRAFT', isOfficial: false };
+      const recaps = await tx.periodRecap.findMany({ where: { healthCenterId, year, endMonth: isQuarter ? { lte: periodNumber * 3 } : periodNumber } });
+      return { healthCenter, sections, indicators, targets, records, recaps: isQuarter ? recaps : recaps.filter(row => structuredInputKindFor(row.indicatorId) === 'DO_SOURCE_ASSESSMENT'), source: 'LIVE_DATABASE', status: lock?.status ?? 'DRAFT', isOfficial: false };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
   }
 
@@ -65,7 +66,7 @@ export class AnalyticsService {
       items: data.indicators.filter(indicator => data.sections.some(section => section.code === indicator.sectionCode)).map(indicator => {
         const records = data.records.filter(row => row.indicatorId === indicator.id);
         const recap = data.recaps?.find(row => row.indicatorId === indicator.id && row.endMonth === endMonth);
-        return { indicatorId: indicator.id, indicator, ...evaluateDoCumulative(indicator.id, { records, months, ...(recap ? { recap } : {}) }) };
+        return { indicatorId: indicator.id, indicator, ...evaluateDoCumulative(indicator.id, { records, months, year, purpose: 'SOURCE_RECAP', ...(recap ? { recap } : {}) }) };
       }),
     };
   }
@@ -73,7 +74,7 @@ export class AnalyticsService {
   async sheet7(healthCenterId: string, year: number, quarter: number | 'ANNUAL') {
     const q = quarter === 'ANNUAL' ? 4 : quarter;
     const data = await this.load(healthCenterId, year, q, true);
-    const result = evaluateDataset(data, Array.from({ length: q * 3 }, (_, index) => index + 1));
+    const result = evaluateDataset(data, Array.from({ length: q * 3 }, (_, index) => index + 1), year);
     const isOfficial = data.isOfficial && result.isComplete && !result.containsDo;
     const rows = Array.from({ length: 5 }, (_, index) => index + 1).flatMap(id => [
       { no: `${id}.0`, name: `Klaster ${id}`, isKlasterHead: true, klasterId: id, nilaiKlaster: output2(result.klasterScores[id]!) },
@@ -94,7 +95,8 @@ export class AnalyticsService {
       targetFraction: result.containsDo ? null : q / 4, denominatorMode: result.containsDo ? 'PER_RECORD_ACTUAL_OR_LEGACY_PRORATED' : 'ANNUAL_PRORATED_BY_COVERED_MONTHS',
       classificationStatus: result.containsDo ? 'UNRESOLVED_CLASSIFICATION' : 'LEGACY_V1',
       aggregationStatus: result.containsDo ? 'PROVISIONAL_LEGACY_HIERARCHY' : 'LEGACY_V1',
-      indicators: result.items.map(item => ({ ...item, pencapaianRiil: output2(item.pencapaianRiil), totalSasaran: output2(item.totalSasaran), targetSasaran: output2(item.targetSasaran), capaianRiilPct: output2(item.capaianRiilPct), nilaiKinerja: output2(item.nilaiKinerja) })),
+      // V2 inputs and measurements must agree at source precision, including at target boundaries.
+      indicators: result.items.map(item => item.scoringVersion === DO_SCORING_VERSION ? item : ({ ...item, pencapaianRiil: output2(item.pencapaianRiil), totalSasaran: output2(item.totalSasaran), targetSasaran: output2(item.targetSasaran), capaianRiilPct: output2(item.capaianRiilPct), nilaiKinerja: output2(item.nilaiKinerja) })),
     };
   }
 
@@ -102,7 +104,7 @@ export class AnalyticsService {
     const months = [];
     for (let month = 1; month <= 12; month++) {
       const data = await this.load(healthCenterId, year, month, false);
-      months.push({ month, data, result: evaluateDataset(data, [month]) });
+      months.push({ month, data, result: evaluateDataset(data, [month], year) });
     }
     return months;
   }

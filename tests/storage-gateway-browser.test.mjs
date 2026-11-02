@@ -763,6 +763,24 @@ test('authenticated private storage gateway frontend', async t => {
       }
     });
 
+    for (const view of ['modal', 'sheet']) for (const year of [2025, 2026]) {
+      await t.test(`${view} shows source-period applicability only for ${year >= 2026 ? '2026+' : 'historical exclusion'} without requests`, async () => {
+        const { page, requests, exceptions } = await fixture(route => route.abort());
+        try {
+          await page.evaluate(({ view, year }) => {
+            const { store, render } = window.gateway;
+            store.state = { ...store.state, year, sheets: { 1: { ...store.state.sheets[1], year } } };
+            render(view);
+          }, { view, year });
+          if (view === 'modal') await page.getByRole('dialog', { name: 'Ekspor laporan PKP', exact: true }).waitFor();
+          else await page.getByRole('heading', { name: `Lembar Hasil Kinerja Puskesmas (NILAI KINERJA ${year})`, exact: true }).waitFor();
+          assert.equal(await page.getByText(/bukan otomatis capaian tahunan|tidak otomatis menjadi capaian tahunan/).count(), year >= 2026 ? 1 : 0);
+          assert.equal(requests.length, 0);
+          assert.deepEqual(exceptions, []);
+        } finally { await page.close(); }
+      });
+    }
+
     for (const view of ['modal', 'sheet', 'evidence']) {
       await t.test(`${view} fetches only on download click, disables busy UI and revokes object URLs`, async () => {
         let release;

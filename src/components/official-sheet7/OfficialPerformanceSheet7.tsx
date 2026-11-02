@@ -143,8 +143,9 @@ export const OfficialPerformanceSheet7: React.FC = () => {
             Lembar Hasil Kinerja Puskesmas (NILAI KINERJA {currentYear})
           </h2>
             <p className="text-xs text-slate-500 mt-1 max-w-2xl">
-            Rekapitulasi server untuk seluruh klaster. Triwulan mencakup Januari sampai akhir triwulan. Unduhan PDF tidak otomatis menjadi dokumen resmi atau pengesahan Dinkes.
-          </p>
+             Rekapitulasi server untuk seluruh klaster. Triwulan mencakup Januari sampai akhir triwulan. Unduhan PDF tidak otomatis menjadi dokumen resmi atau pengesahan Dinkes.
+           </p>
+           {currentYear >= 2026 && <p className="mt-2 max-w-2xl text-xs text-slate-600">Asesmen sumber mengikuti periode DO masing-masing. Snapshot, bulan, triwulan, tahun ajaran dan kohort tidak otomatis menjadi capaian tahunan. Hasil dengan lingkup tidak cocok ditahan server, bukan digabung atau dirata-rata antarbulan.</p>}
         </div>
 
         {/* Action Controls */}
