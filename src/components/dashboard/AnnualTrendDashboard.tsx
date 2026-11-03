@@ -1,6 +1,7 @@
 import React, { useState, useSyncExternalStore, useMemo } from 'react';
 import { pkpStore } from '../../services/apiStore';
 import { AnnualTrendData, AnnualIndicatorTrend, OfficialIndicator } from '../../types/pkp';
+import { measurementText } from '../../types/do2026';
 import { 
   CalendarRange, 
   TrendingUp, 
@@ -50,7 +51,7 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
   const load = pkpStore.getLoadState();
   const [selectedKlaster, setSelectedKlaster] = useState<number>(0); // 0 = Semua
   const [viewMode, setViewMode] = useState<'KLASTER' | 'INDICATOR'>('KLASTER');
-  const [metricType, setMetricType] = useState<'SCORE' | 'PERCENT' | 'NUMERATOR'>('SCORE');
+  const [metricType, setMetricType] = useState<'SCORE' | 'PERCENT' | 'NUMERATOR' | 'MEASUREMENT'>('SCORE');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [expandedKlasters, setExpandedKlasters] = useState<Record<number, boolean>>({
     1: true,
@@ -66,6 +67,12 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
     trendData = { ...raw, monthlyOverallScores: months(raw.monthlyOverallScores), klasters: raw.klasters.map(k => ({ ...k, monthlyScores: months(k.monthlyScores) })), subKlasters: raw.subKlasters.map(s => ({ ...s, monthlyScores: months(s.monthlyScores) })) };
   } catch { /* Scope analytics are unavailable while loading. */ }
   const indicatorsTrend = pkpStore.getAnnualIndicatorsTrend(selectedKlaster, currentYear) as unknown as IndicatorView[];
+  let firstQuarter: ReturnType<typeof pkpStore.getOfficialSheet7Data> | undefined;
+  try { firstQuarter = pkpStore.getOfficialSheet7Data(1, currentYear); } catch { /* Never substitute a monthly score for a cumulative recap. */ }
+  const usesDo = trendData?.aggregation === 'ANNUAL_MEAN_UNAVAILABLE_FOR_DO_PROFILES';
+  const monthlyTarget = (item: IndicatorView) => item.monthlyVersions?.includes('DO_2026_V2') ? null
+    : pkpStore.getAnnualTargets()[item.indicator.id]?.targetSasaran == null ? null
+    : pkpStore.getAnnualTargets()[item.indicator.id].targetSasaran / 12;
 
   const monthShorts = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
   const monthFullNames = [
@@ -76,6 +83,7 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
   // Helper for color badge
   const getCellBadgeClass = (score: number | null | undefined) => {
     if (!hasNumber(score)) return 'bg-slate-100 text-slate-400 border-slate-200';
+    if (usesDo) return 'bg-slate-100 text-slate-700 border-slate-200 font-bold';
     if (score >= 91) return 'bg-emerald-50 text-emerald-700 border-emerald-200 font-bold';
     if (score >= 81) return 'bg-amber-50 text-amber-700 border-amber-200 font-bold';
     return 'bg-rose-50 text-rose-700 border-rose-200 font-bold';
@@ -112,14 +120,17 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
         });
       });
     } else {
-      csv = 'Kode,Indikator Kinerja,Satuan,Target Sasaran,Jan,Feb,Mar (TW1),Apr,Mei,Jun (TW2),Jul,Agu,Sep (TW3),Okt,Nov,Des (TW4),Rerata Nilai,Kategori\n';
+      csv = 'Kode,Indikator Kinerja,Satuan Input,Target/Bln V1,Metrik,Jan,Feb,Mar (TW1),Apr,Mei,Jun (TW2),Jul,Agu,Sep (TW3),Okt,Nov,Des (TW4),Rerata Bulanan V1,Kategori\n';
       filteredIndicators.forEach(item => {
         const scores = metricType === 'SCORE' 
           ? item.monthlyScores 
           : metricType === 'PERCENT' 
           ? item.monthlyPct 
-          : item.monthlyValues;
-        csv += `"${item.indicator.no}","${item.indicator.indikator.replace(/"/g, '""')}","${item.indicator.satuan}","${pkpStore.getAnnualTargets()[item.indicator.id]?.targetSasaran ?? '-'}",${months(scores).map(v => hasNumber(v) ? String(v) : '-').join(',')},"${metricType === 'NUMERATOR' ? '-' : formatNumber(metricType === 'PERCENT' ? item.annualAveragePct : item.annualAverageScore)}","${item.category ?? 'Belum dinilai'}"\n`;
+           : metricType === 'MEASUREMENT' ? item.monthlyMeasurements : item.monthlyValues;
+        const cells = months(scores).map((value, index) => metricType === 'MEASUREMENT'
+          ? `"${measurementText(value, item.monthlyUnits?.[index], 5).replace(/"/g, '""')}"`
+          : hasNumber(value) ? String(value) : '-');
+        csv += `"${item.indicator.no}","${item.indicator.indikator.replace(/"/g, '""')}","${item.indicator.satuan}","${formatNumber(monthlyTarget(item))}","${metricType}",${cells.join(',')},"${metricType === 'NUMERATOR' || metricType === 'MEASUREMENT' ? '-' : formatNumber(metricType === 'PERCENT' ? item.annualAveragePct : item.annualAverageScore)}","${item.category ?? 'Belum dinilai'}"\n`;
       });
     }
 
@@ -232,20 +243,20 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
         {/* Card 3: Milestone Triwulan I */}
         <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-2xs hover:shadow-md transition-shadow">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Milestone TW I (Mar)</span>
+             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Rekap TW I (Jan-Mar)</span>
             <div className="w-8 h-8 rounded-xl bg-teal-100 flex items-center justify-center text-teal-600">
               <Award className="w-4 h-4" />
             </div>
           </div>
           <div className="mt-2">
             <span className="text-2xl font-black text-slate-900 font-mono">
-              {formatNumber(trendData.monthlyOverallScores[2], '%')}
+               {formatNumber(firstQuarter?.nilaiKinerjaPuskesmas, '%')}
             </span>
             <span className="ml-2 text-xs font-bold text-teal-700 bg-teal-50 px-2 py-0.5 rounded-md border border-teal-200">
               {pkpStore.getPeriodLock(currentYear, 1, true).status}
             </span>
           </div>
-          <p className="mt-2 text-xs text-slate-500">Status evaluasi triwulan dari server</p>
+           <p className="mt-2 text-xs text-slate-500">{!firstQuarter ? 'Rekap triwulan belum tersedia.' : firstQuarter.isComplete ? 'Rekap kumulatif Januari-Maret dari server.' : 'Rekap kumulatif Januari-Maret masih parsial.'} {firstQuarter?.classificationStatus === 'UNRESOLVED_CLASSIFICATION' ? 'Kategori DO belum ditetapkan.' : ''}</p>
         </div>
 
         {/* Card 4: Kepatuhan Entri 12 Bulan */}
@@ -258,9 +269,9 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
           </div>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-2xl font-black text-slate-900 font-mono">
-              {trendData.monthlyOverallScores.filter(hasNumber).length} / 12
+               {trendData.monthlyComplete?.filter(Boolean).length ?? 0} / 12
             </span>
-            <span className="text-xs text-slate-500 font-medium">Bulan Dinilai</span>
+             <span className="text-xs text-slate-500 font-medium">Bulan lengkap secara hitung</span>
           </div>
           {/* 12-dot timeline */}
           <div className="mt-3 flex items-center gap-1">
@@ -268,9 +279,9 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
               <div 
                 key={m}
                 className={`h-2 flex-1 rounded-sm ${
-                  hasNumber(trendData.monthlyOverallScores[idx]) ? 'bg-emerald-500' : 'bg-slate-200'
+                   trendData.monthlyComplete?.[idx] ? 'bg-emerald-500' : 'bg-slate-200'
                 }`}
-                title={`Bulan ${idx+1} (${m}): ${hasNumber(trendData.monthlyOverallScores[idx]) ? 'Dinilai' : 'Belum dinilai'}`}
+                 title={`Bulan ${idx+1} (${m}): ${trendData.monthlyComplete?.[idx] ? 'Lengkap secara hitung' : 'Belum lengkap secara hitung'}`}
               />
             ))}
           </div>
@@ -286,7 +297,7 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
               <span>Kurva Tren Skor PKP Bulanan (Januari – Desember {currentYear})</span>
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              Target Standar Mutu: <strong className="text-emerald-700">Baik ≥ 91%</strong> • <strong className="text-amber-600">Cukup 81–90%</strong> • <strong className="text-rose-600">Kurang &lt; 81%</strong>
+             {usesDo ? 'Agregat DO bersifat provisional; kategori V1 tidak diterapkan.' : <>Kategori legacy V1: <strong className="text-emerald-700">Baik ≥ 91%</strong> • <strong className="text-amber-600">Cukup 81–90%</strong> • <strong className="text-rose-600">Kurang &lt; 81%</strong></>}
             </p>
           </div>
           <div className="flex items-center gap-2 text-xs">
@@ -294,10 +305,10 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
               <span className="w-2 h-2 rounded-full bg-emerald-500" />
               Skor Total PKP
             </span>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-50 text-slate-600 border border-slate-200 font-medium">
+             {!usesDo && <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-50 text-slate-600 border border-slate-200 font-medium">
               <span className="w-2 h-0.5 bg-amber-400" />
               Garis Ambang Cukup (81%)
-            </span>
+             </span>}
           </div>
         </div>
 
@@ -305,8 +316,8 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
         <div className="mt-6 pt-4 pb-2">
           <div className="grid grid-cols-12 gap-2 sm:gap-3 items-end h-44 border-b border-slate-200 px-2 relative">
             {/* Horizontal Guide Lines */}
-            <div className="absolute inset-x-0 bottom-[81%] border-b border-dashed border-amber-300 pointer-events-none z-0" />
-            <div className="absolute inset-x-0 bottom-[91%] border-b border-dashed border-emerald-300 pointer-events-none z-0" />
+           {!usesDo && <div className="absolute inset-x-0 bottom-[81%] border-b border-dashed border-amber-300 pointer-events-none z-0" />}
+           {!usesDo && <div className="absolute inset-x-0 bottom-[91%] border-b border-dashed border-emerald-300 pointer-events-none z-0" />}
 
             {trendData.monthlyOverallScores.map((score, idx) => {
               const isQuarter = idx === 2 || idx === 5 || idx === 8 || idx === 11;
@@ -316,9 +327,9 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
               return (
                 <div key={idx} className="flex flex-col items-center h-full justify-end group relative z-10">
                   {/* Tooltip on hover */}
-                  <div className="absolute -top-12 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-900 text-white text-[11px] rounded-lg px-2.5 py-1 pointer-events-none shadow-xl whitespace-nowrap z-30 font-medium">
+                   <div className={`absolute -top-12 w-40 ${idx < 6 ? 'left-0' : 'right-0'} opacity-0 group-hover:opacity-100 transition-opacity bg-slate-900 text-white text-[11px] rounded-lg px-2.5 py-1 pointer-events-none shadow-xl z-30 font-medium`}>
                     <p className="font-bold">{monthFullNames[idx]}: {formatNumber(score, '%')}</p>
-                    <p className="text-[10px] text-slate-300">{isQuarter ? `Evaluasi Resmi TW ${Math.floor(idx/3)+1}` : 'Capaian Reguler'}</p>
+                     <p className="text-[10px] text-slate-300">{isQuarter ? `Bulan akhir TW ${Math.floor(idx/3)+1}, bukan rekap kumulatif` : 'Capaian bulanan'}</p>
                   </div>
 
                   {/* Top value */}
@@ -334,7 +345,8 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
                     className={`w-full max-w-[42px] rounded-t-xl transition-all duration-300 group-hover:brightness-110 cursor-pointer shadow-xs ${
                       !hasData
                         ? 'bg-slate-200 border border-slate-300 border-dashed'
-                        : hasNumber(score) && score >= 91
+                       : usesDo ? 'bg-slate-500'
+                       : hasNumber(score) && score >= 91
                         ? 'bg-gradient-to-t from-emerald-600 to-emerald-400'
                         : hasNumber(score) && score >= 81
                         ? 'bg-gradient-to-t from-amber-600 to-amber-400'
@@ -373,7 +385,7 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
       <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-2xs space-y-3">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
           {/* View Mode Switcher */}
-          <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-xl border border-slate-200 text-xs">
+           <div className="flex flex-wrap items-center gap-1.5 p-1 bg-slate-100 rounded-xl border border-slate-200 text-xs">
             <button
               onClick={() => setViewMode('KLASTER')}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold transition-all ${
@@ -401,7 +413,7 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
 
           {/* Metric Selector (Only active in detailed mode) */}
           {viewMode === 'INDICATOR' && (
-            <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-xl border border-slate-200 text-xs">
+           <div className="flex flex-wrap items-center gap-1.5 p-1 bg-slate-100 rounded-xl border border-slate-200 text-xs">
               <span className="text-[11px] font-semibold text-slate-500 pl-2">Tampilkan:</span>
               <button
                 onClick={() => setMetricType('SCORE')}
@@ -425,8 +437,14 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
                   metricType === 'NUMERATOR' ? 'bg-emerald-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Numerator Riil
-              </button>
+               Numerator Riil
+             </button>
+             <button
+               onClick={() => setMetricType('MEASUREMENT')}
+               className={`px-2.5 py-1 rounded-lg font-bold transition-all ${metricType === 'MEASUREMENT' ? 'bg-emerald-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}
+             >
+               Pengukuran DO (satuan asli)
+             </button>
             </div>
           )}
 
@@ -508,7 +526,7 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
               </span>
             </h3>
             <p className="text-[11px] text-slate-500 mt-0.5">
-              Nilai per kolom adalah analitik bulanan dari server, bukan rekap kumulatif resmi. Penanda TW menunjukkan akhir triwulan; nilai tahunan mengikuti agregasi server.
+             Nilai per kolom adalah analitik bulanan dari server, bukan rekap kumulatif. Penanda TW menunjukkan akhir triwulan; rerata bulanan V1 bukan hasil penilaian tahunan. Target/Bln V1 tidak berlaku untuk DO.
             </p>
           </div>
 
@@ -530,8 +548,8 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
                 </th>
                 {viewMode === 'INDICATOR' && (
                   <>
-                    <th className="py-2.5 px-2 w-16 text-center border-r border-slate-200">Satuan</th>
-                    <th className="py-2.5 px-2 w-16 text-right border-r border-slate-200">Tgt/Bln</th>
+                   <th className="py-2.5 px-2 w-16 text-center border-r border-slate-200">Satuan input</th>
+                   <th className="py-2.5 px-2 w-16 text-right border-r border-slate-200">Target/Bln V1</th>
                   </>
                 )}
                 {/* 12 Month Columns */}
@@ -559,7 +577,7 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
                     </th>
                   );
                 })}
-                <th className="py-2.5 px-3 w-24 text-right border-r border-slate-200 bg-slate-50">Rerata</th>
+                 <th className="py-2.5 px-3 w-24 text-right border-r border-slate-200 bg-slate-50">Rerata bulanan V1</th>
                 <th className="py-2.5 px-3 w-28 text-center border-r border-slate-200">Kategori</th>
                 <th className="py-2.5 px-3 w-24 text-center">Tren</th>
               </tr>
@@ -636,7 +654,7 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
                                     key={scIdx}
                                     style={{ height: hasNumber(sc) ? `${Math.max(0, Math.min(100, sc))}%` : '0%' }}
                                     className={`flex-1 rounded-xs ${
-                                      !hasNumber(sc) ? 'bg-slate-200' : sc >= 91 ? 'bg-emerald-500' : sc >= 81 ? 'bg-amber-400' : 'bg-rose-400'
+                                     !hasNumber(sc) ? 'bg-slate-200' : usesDo ? 'bg-slate-500' : sc >= 91 ? 'bg-emerald-500' : sc >= 81 ? 'bg-amber-400' : 'bg-rose-400'
                                     }`}
                                   />
                                 ))}
@@ -695,7 +713,7 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
                                       key={scIdx}
                                       style={{ height: hasNumber(sc) ? `${Math.max(0, Math.min(100, sc))}%` : '0%' }}
                                       className={`flex-1 rounded-xs ${
-                                        !hasNumber(sc) ? 'bg-slate-200' : sc >= 91 ? 'bg-emerald-500' : sc >= 81 ? 'bg-amber-400' : 'bg-rose-400'
+                                       !hasNumber(sc) ? 'bg-slate-200' : usesDo ? 'bg-slate-500' : sc >= 91 ? 'bg-emerald-500' : sc >= 81 ? 'bg-amber-400' : 'bg-rose-400'
                                       }`}
                                     />
                                   ))}
@@ -717,7 +735,7 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
                       ? item.monthlyScores 
                       : metricType === 'PERCENT' 
                       ? item.monthlyPct 
-                      : item.monthlyValues;
+                       : metricType === 'MEASUREMENT' ? item.monthlyMeasurements : item.monthlyValues;
 
                     const isHead = item.indicator.isHead;
 
@@ -746,7 +764,7 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
                           {item.indicator.satuan}
                         </td>
                         <td className="py-2 px-2 text-right font-mono text-[11px] text-slate-600 border-r border-slate-200">
-                          {formatNumber(pkpStore.getAnnualTargets()[item.indicator.id]?.targetSasaran == null ? null : pkpStore.getAnnualTargets()[item.indicator.id].targetSasaran / 12)}
+                           {formatNumber(monthlyTarget(item))}
                         </td>
 
                         {/* 12 Months Cells */}
@@ -765,7 +783,7 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
                                   ? getCellBadgeClass(val)
                                   : hasNumber(val) ? 'bg-slate-100 text-slate-800 border-slate-300 font-bold' : 'bg-slate-50 text-slate-400 border-slate-200'
                               }`}>
-                                {hasNumber(val)
+                                 {metricType === 'MEASUREMENT' ? measurementText(val, item.monthlyUnits?.[idx], 5) : hasNumber(val)
                                   ? (metricType === 'NUMERATOR' ? val : `${val.toFixed(1)}${metricType === 'PERCENT' ? '%' : ''}`) 
                                   : '-'}
                               </span>
@@ -775,7 +793,7 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
 
                         {/* Annual Average */}
                         <td className="py-2 px-3 text-right font-mono font-bold text-slate-900 border-r border-slate-200 bg-slate-50/60">
-                          {metricType === 'NUMERATOR' ? '-' : formatNumber(metricType === 'PERCENT' ? item.annualAveragePct : item.annualAverageScore, metricType === 'PERCENT' ? '%' : '')}
+                           {metricType === 'NUMERATOR' || metricType === 'MEASUREMENT' ? '-' : formatNumber(metricType === 'PERCENT' ? item.annualAveragePct : item.annualAverageScore, metricType === 'PERCENT' ? '%' : '')}
                         </td>
 
                         {/* Category */}
@@ -797,7 +815,7 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
                                 key={scIdx}
                                 style={{ height: hasNumber(sc) ? `${Math.max(0, Math.min(100, sc))}%` : '0%' }}
                                 className={`flex-1 rounded-xs ${
-                                  !hasNumber(sc) ? 'bg-slate-200' : sc >= 91 ? 'bg-emerald-500' : sc >= 81 ? 'bg-amber-400' : 'bg-rose-400'
+                                   !hasNumber(sc) ? 'bg-slate-200' : usesDo ? 'bg-slate-500' : sc >= 91 ? 'bg-emerald-500' : sc >= 81 ? 'bg-amber-400' : 'bg-rose-400'
                                 }`}
                               />
                             ))}
