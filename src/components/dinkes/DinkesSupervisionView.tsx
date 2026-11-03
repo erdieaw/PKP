@@ -17,9 +17,24 @@ type CenterView = Omit<HealthCenter, 'currentScore' | 'kategoriPKP' | 'klasterSc
   currentScore: number | null;
   kategoriPKP: string | null;
   klasterScores: Record<number, number | null>;
+  isComplete?: boolean;
+  classificationStatus?: string;
+  aggregationStatus?: string;
+  scoringVersion?: string;
+};
+type Comparison = Pick<CenterView, 'isComplete' | 'classificationStatus' | 'aggregationStatus' | 'scoringVersion' | 'kategoriPKP' | 'klasterScores'> & {
+  healthCenterId: string;
+  nilaiKinerjaPuskesmas: number | null;
 };
 const hasScore = (score: number | null | undefined): score is number => typeof score === 'number' && Number.isFinite(score);
 const formatScore = (score: number | null | undefined) => hasScore(score) ? `${score.toFixed(1)}%` : '-';
+const isClassifiable = (center: CenterView) => hasScore(center.currentScore) && center.isComplete === true
+  && center.scoringVersion === 'ILP_2026_V1' && center.classificationStatus === 'LEGACY_V1' && center.aggregationStatus === 'LEGACY_V1'
+  && ['Kinerja Baik', 'Kinerja Cukup', 'Kinerja Kurang'].includes(center.kategoriPKP ?? '');
+const scoreStatus = (center: CenterView) => center.classificationStatus === 'UNRESOLVED_CLASSIFICATION'
+  || center.aggregationStatus === 'PROVISIONAL_LEGACY_HIERARCHY' || center.scoringVersion === 'PER_RECORD_VERSIONED' || center.scoringVersion === 'DO_2026_V2'
+  ? `Sementara DO; kategori belum ditetapkan${center.isComplete === false ? '; parsial' : ''}` : center.isComplete === false ? 'Parsial; belum lengkap'
+    : !hasScore(center.currentScore) ? 'Belum dinilai' : 'Klasifikasi belum tersedia';
 
 export const DinkesSupervisionView: React.FC<DinkesSupervisionViewProps> = ({
   onSelectPuskesmas,
@@ -39,8 +54,10 @@ export const DinkesSupervisionView: React.FC<DinkesSupervisionViewProps> = ({
       const cached = pkpStore.getPuskesmasList() as unknown as CenterView[];
       // Only comparison rows returned for this request can supply scores.
       const centers = cached.map(center => {
-        const summary = (data.comparison as { healthCenterId: string; nilaiKinerjaPuskesmas: number | null; kategoriPKP: string | null; klasterScores: Record<number, number | null> }[]).find(row => row.healthCenterId === center.id);
-        return { ...center, currentScore: summary?.nilaiKinerjaPuskesmas ?? null, kategoriPKP: summary?.kategoriPKP ?? null, klasterScores: summary?.klasterScores ?? {} };
+        const summary = (data.comparison as Comparison[]).find(row => row.healthCenterId === center.id);
+        return { ...center, currentScore: summary?.nilaiKinerjaPuskesmas ?? null, kategoriPKP: summary?.kategoriPKP ?? null, klasterScores: summary?.klasterScores ?? {},
+          isComplete: summary?.isComplete, classificationStatus: summary?.classificationStatus,
+          aggregationStatus: summary?.aggregationStatus, scoringVersion: summary?.scoringVersion };
       });
       setResult({ key: requestKey, loading: false, error: null, centers });
     }).catch(cause => {
@@ -50,15 +67,15 @@ export const DinkesSupervisionView: React.FC<DinkesSupervisionViewProps> = ({
   }, [year, selectedMonth, quarter, requestKey]);
   const puskesmasList = result.key === requestKey ? result.centers : [];
 
-  // Sort descending by score
-  const sorted = [...puskesmasList].sort((a, b) => !hasScore(a.currentScore) ? (hasScore(b.currentScore) ? 1 : a.name.localeCompare(b.name)) : !hasScore(b.currentScore) ? -1 : b.currentScore - a.currentScore);
+  // Partial/provisional arithmetic remains visible, but never enters the ranking.
+  const assessed = puskesmasList.filter(isClassifiable).sort((a, b) => b.currentScore! - a.currentScore!);
+  const sorted = [...assessed, ...puskesmasList.filter(p => !isClassifiable(p)).sort((a, b) => a.name.localeCompare(b.name))];
 
   const filtered = sorted.filter(p => {
     if (filterCategory === 'all') return true;
-    return hasScore(p.currentScore) && p.kategoriPKP === filterCategory;
+    return isClassifiable(p) && p.kategoriPKP === filterCategory;
   });
 
-  const assessed = puskesmasList.filter(p => hasScore(p.currentScore));
   const baikCount = assessed.filter(p => p.kategoriPKP === 'Kinerja Baik').length;
   const cukupCount = assessed.filter(p => p.kategoriPKP === 'Kinerja Cukup').length;
   const kurangCount = assessed.filter(p => p.kategoriPKP === 'Kinerja Kurang').length;
@@ -80,17 +97,17 @@ export const DinkesSupervisionView: React.FC<DinkesSupervisionViewProps> = ({
               Pemeringkatan Kinerja Puskesmas Se-Wilayah (TW {quarter}, {year})
             </h2>
             <p className="text-slate-300 text-xs max-w-2xl leading-relaxed">
-              Monitoring capaian kumulatif 5 Klaster ILP, pengelompokan kuadran mutu, dan komparasi hasil penilaian kinerja seluruh Puskesmas binaan dinas kesehatan.
+              Perbandingan kumulatif untuk evaluasi internal. Peringkat, rerata dan kategori hanya memakai hasil V1 lengkap yang dapat diklasifikasikan, bukan pengesahan aturan PKP 2026. Angka DO/parsial tetap ditampilkan sebagai hasil sementara tanpa kategori V1.
             </p>
           </div>
 
           <div className="bg-indigo-900/50 p-4 rounded-xl border border-indigo-700/60 text-right">
-            <span className="text-xs text-indigo-200">Rerata Nilai Kabupaten/Kota</span>
+            <span className="text-xs text-indigo-200">Rerata V1 Lengkap Kabupaten/Kota</span>
             <div className="text-3xl font-extrabold font-mono text-indigo-300 mt-0.5">
               {formatScore(districtAvg)}
             </div>
             <span className="text-[11px] text-indigo-200 font-semibold">
-              {assessed.length} Dinilai / {puskesmasList.length} Puskesmas Terdaftar
+              {assessed.length} V1 lengkap / {puskesmasList.length} Puskesmas Terdaftar
             </span>
           </div>
         </div>
@@ -109,7 +126,7 @@ export const DinkesSupervisionView: React.FC<DinkesSupervisionViewProps> = ({
             <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold font-mono">≥ 91%</span>
           </div>
           <div className="text-2xl font-bold font-mono text-emerald-700 mt-2">{baikCount} Puskesmas</div>
-          <span className="text-[11px] text-slate-500">Memenuhi standar mutu paripurna</span>
+          <span className="text-[11px] text-slate-500">Kategori kompatibilitas V1, bukan penilaian resmi</span>
         </div>
 
         <div 
@@ -120,10 +137,10 @@ export const DinkesSupervisionView: React.FC<DinkesSupervisionViewProps> = ({
         >
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-amber-800 uppercase">Kelompok II: Kinerja Cukup</span>
-            <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-xs font-bold font-mono">81 - 90%</span>
+            <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-xs font-bold font-mono">81% sampai &lt;91%</span>
           </div>
           <div className="text-2xl font-bold font-mono text-amber-700 mt-2">{cukupCount} Puskesmas</div>
-          <span className="text-[11px] text-slate-500">Perlu akselerasi indikator tertinggal</span>
+          <span className="text-[11px] text-slate-500">Kategori kompatibilitas V1, bukan penilaian resmi</span>
         </div>
 
         <div 
@@ -137,13 +154,13 @@ export const DinkesSupervisionView: React.FC<DinkesSupervisionViewProps> = ({
             <span className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 text-xs font-bold font-mono">&lt; 81%</span>
           </div>
           <div className="text-2xl font-bold font-mono text-rose-700 mt-2">{kurangCount} Puskesmas</div>
-          <span className="text-[11px] text-slate-500">Wajib pendampingan intensif Dinkes</span>
+          <span className="text-[11px] text-slate-500">Kategori kompatibilitas V1, bukan penilaian resmi</span>
         </div>
       </div>
 
       {/* Main Ranking Table */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between text-xs">
+        <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex items-center gap-2 font-bold text-slate-800">
             <Trophy className="w-4 h-4 text-amber-500" />
             <span>Papan Peringkat Kinerja Puskesmas Se-Kabupaten/Kota ({filtered.length} Faskes)</span>
@@ -170,7 +187,7 @@ export const DinkesSupervisionView: React.FC<DinkesSupervisionViewProps> = ({
             <tbody className="divide-y divide-slate-100">
               {!filtered.length && <tr><td colSpan={10} className="p-6 text-center text-slate-500">{puskesmasList.length ? 'Tidak ada Puskesmas dalam kategori ini. Klik kategori aktif untuk menampilkan semua.' : 'Belum ada Puskesmas untuk dibandingkan pada periode ini.'}</td></tr>}
               {filtered.map(pkm => {
-                const rank = hasScore(pkm.currentScore) ? sorted.findIndex(center => center.id === pkm.id) + 1 : null;
+                const rank = isClassifiable(pkm) ? assessed.findIndex(center => center.id === pkm.id) + 1 : null;
 
                 return (
                   <tr 
@@ -219,7 +236,10 @@ export const DinkesSupervisionView: React.FC<DinkesSupervisionViewProps> = ({
 
                     {/* Total Score */}
                     <td className="py-3 px-3 text-center">
-                      <ScoreBadge score={pkm.currentScore} size="md" />
+                      {isClassifiable(pkm) ? <ScoreBadge score={pkm.currentScore} size="md" /> : <div className="text-xs text-slate-600">
+                        <span className="font-mono font-bold">{formatScore(pkm.currentScore)}</span>
+                        <p>{scoreStatus(pkm)}</p>
+                      </div>}
                     </td>
 
                     {/* Status Sinkronisasi Provinsi */}

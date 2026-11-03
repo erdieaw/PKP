@@ -224,6 +224,9 @@ export interface AnnualSubKlasterTrend {
 
 export interface AnnualIndicatorTrend {
   indicator: OfficialIndicator;
+  monthlyMeasurements?: (number | null)[];
+  monthlyUnits?: (string | null)[];
+  monthlyVersions?: (string | null)[];
   monthlyValues: number[]; // 12 elements: numerator / pencapaianRiil
   monthlyPct: number[];    // 12 elements: capaianRiilPct
   monthlyScores: number[]; // 12 elements: nilaiKinerja
@@ -234,6 +237,8 @@ export interface AnnualIndicatorTrend {
 
 export interface AnnualTrendData {
   year: number;
+  aggregation?: string;
+  monthlyComplete?: boolean[];
   monthlyOverallScores: number[];
   monthlySubmittedCount: number[];
   monthlyCategories: string[];

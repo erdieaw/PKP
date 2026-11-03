@@ -188,6 +188,33 @@ test('monthly arithmetic completed-month average differs from cumulative officia
   assert.equal(trends.items[0]!.monthlyValues[1], null);
 });
 
+test('all four YTD quarters and annual use their exact cutoff, not quarter-only totals or monthly means', async () => {
+  const f = fixture();
+  f.records.splice(0, f.records.length, ...f.indicators.flatMap(item => Array.from({ length: 12 }, (_, index) => ({
+    healthCenterId: f.healthCenterId, year: 2026, indicatorId: item.id, month: index + 1,
+    pencapaianRiil: String((index + 1) * 10),
+  }))));
+  for (const [quarter, numerator, denominator, expected] of [[1, 60, 300, 20], [2, 210, 600, 35], [3, 450, 900, 50], [4, 780, 1200, 65]] as const) {
+    const sheet = await f.service.sheet7(f.healthCenterId, 2026, quarter);
+    assert.equal(sheet.nilaiKinerjaPuskesmas, expected, `TW${quarter} YTD`);
+    assert.equal(sheet.isComplete, true);
+    for (const item of sheet.indicators) {
+      assert.equal(item.pencapaianRiil, numerator);
+      assert.equal(item.totalSasaran, denominator);
+      assert.equal(item.nilaiKinerja, expected);
+    }
+  }
+  const q4 = await f.service.sheet7(f.healthCenterId, 2026, 4);
+  const annual = await f.service.sheet7(f.healthCenterId, 2026, 'ANNUAL');
+  assert.deepEqual(annual.indicators, q4.indicators);
+  assert.deepEqual(annual.klasterScores, q4.klasterScores);
+  assert.equal(annual.nilaiKinerjaPuskesmas, 65);
+  const monthly = await f.service.annualTrend(f.healthCenterId, 2026);
+  assert.equal(monthly.monthlyOverallScores[11], 100);
+  assert.equal(monthly.annualAveragePKP, 62.5);
+  assert.notEqual(annual.nilaiKinerjaPuskesmas, monthly.annualAveragePKP);
+});
+
 test('exact quarterly and monthly frozen snapshots survive changes to live metadata and targets', async () => {
   const f = fixture();
   const snapshot = (periodNumber: number, isQuarter: boolean) => JSON.parse(JSON.stringify({ schemaVersion: 1, healthCenter: f.healthCenter, sections: f.sections, indicators: f.indicators, targets: f.targets, records: f.records, period: { healthCenterId: f.healthCenterId, year: 2026, periodNumber, isQuarter } }));

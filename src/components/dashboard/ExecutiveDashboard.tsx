@@ -23,16 +23,22 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
   useSyncExternalStore(pkpStore.subscribe, pkpStore.getSnapshot, pkpStore.getServerSnapshot);
   const load = pkpStore.getLoadState();
   const indicators = pkpStore.getIndicators();
-  let trend: ReturnType<typeof pkpStore.getAnnualTrendData> | undefined;
+  let trend: (ReturnType<typeof pkpStore.getAnnualTrendData> & { scoringVersion?: string; monthlyComplete?: readonly boolean[] }) | undefined;
   try { trend = pkpStore.getAnnualTrendData(); } catch { /* Analytics may not be loaded yet. */ }
   const monthlyScore = trend?.monthlyOverallScores[selectedMonth - 1];
   const totalPKP = typeof monthlyScore === 'number' && Number.isFinite(monthlyScore) ? monthlyScore : null;
-  const kategoriPKP = totalPKP === null ? 'Belum dinilai' : (trend?.monthlyCategories[selectedMonth - 1] ?? 'Belum dinilai');
+  const monthlyCategory = trend?.monthlyCategories[selectedMonth - 1];
+  const classifiable = trend?.scoringVersion === 'ILP_2026_V1' && trend.monthlyComplete?.[selectedMonth - 1] === true
+    && ['Kinerja Baik', 'Kinerja Cukup', 'Kinerja Kurang'].includes(monthlyCategory ?? '');
+  const scoreStatus = trend?.scoringVersion === 'PER_RECORD_VERSIONED' || trend?.scoringVersion === 'DO_2026_V2'
+    ? `Sementara DO; kategori belum ditetapkan${trend?.monthlyComplete?.[selectedMonth - 1] === false ? '; parsial' : ''}` : trend?.monthlyComplete?.[selectedMonth - 1] === false
+      ? 'Parsial; belum lengkap' : totalPKP === null ? 'Belum dinilai' : 'Klasifikasi belum tersedia';
+  const kategoriPKP = classifiable && totalPKP !== null ? monthlyCategory : totalPKP === null ? 'Belum dinilai' : scoreStatus;
   const scoredItems = indicators.map(ind => {
     const rec = pkpStore.getMonthlyRecord(ind.id, selectedMonth);
     return {
       klasterId: ind.klasterId,
-      score: rec.scoringVersion !== 'DO_2026_V2' && !rec.isMissing && typeof rec.nilaiKinerja === 'number' && Number.isFinite(rec.nilaiKinerja) ? rec.nilaiKinerja : null,
+      score: rec.scoringVersion === 'ILP_2026_V1' && !rec.isMissing && typeof rec.nilaiKinerja === 'number' && Number.isFinite(rec.nilaiKinerja) ? rec.nilaiKinerja : null,
       hasInput: !rec.isMissing && typeof rec.pencapaianRiil === 'number' && Number.isFinite(rec.pencapaianRiil)
     };
   });
@@ -86,11 +92,11 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
           <div className="flex items-center gap-5 sm:gap-6 bg-obsidian-850/90 backdrop-blur-md p-4 sm:p-5 rounded-2xl border border-obsidian-700/80 shadow-inner">
             <div className="text-right">
               <p className="text-[11px] text-slate-400 font-medium">Skor Total PKP</p>
-              <div className="text-3xl sm:text-4xl font-black font-mono text-emerald-400">
+              <div className={`text-3xl sm:text-4xl font-black font-mono ${classifiable ? 'text-emerald-400' : 'text-slate-300'}`}>
                 {totalPKP === null ? '-' : `${totalPKP.toFixed(1)}%`}
               </div>
               <p className={`text-xs font-bold mt-0.5 ${
-                totalPKP === null ? 'text-slate-400' : kategoriPKP === 'Kinerja Baik' ? 'text-emerald-400' : kategoriPKP === 'Kinerja Cukup' ? 'text-amber-400' : 'text-rose-400'
+                totalPKP === null || !classifiable ? 'text-slate-400' : kategoriPKP === 'Kinerja Baik' ? 'text-emerald-400' : kategoriPKP === 'Kinerja Cukup' ? 'text-amber-400' : 'text-rose-400'
               }`}>
                 {kategoriPKP}
               </p>
@@ -157,7 +163,7 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
 
       {/* 5 Klasters Performance Grid */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+        <div className="p-5 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="font-bold text-slate-800 text-sm">Capaian per Klaster Pelayanan (ILP)</h3>
             <p className="text-xs text-slate-500">Ringkasan untuk evaluasi internal bulan {selectedMonth}, bukan penilaian resmi.</p>
@@ -198,7 +204,7 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
                   <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
                     <div 
                       className={`h-full rounded-full transition-all ${
-                        k.score === null ? 'bg-slate-300' : k.score >= 91 ? 'bg-emerald-500' : k.score >= 81 ? 'bg-amber-500' : 'bg-rose-500'
+                        k.score === null || !classifiable ? 'bg-slate-300' : k.score >= 91 ? 'bg-emerald-500' : k.score >= 81 ? 'bg-amber-500' : 'bg-rose-500'
                       }`}
                       style={{ width: k.score === null ? '0%' : `${Math.max(0, Math.min(100, k.score))}%` }}
                     />
@@ -206,7 +212,10 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
                 </div>
 
                 <div className="min-w-[120px] text-right">
-                  <ScoreBadge score={k.score} size="md" />
+                  {classifiable ? <ScoreBadge score={k.score} size="md" /> : <div className="text-xs text-slate-600">
+                    <span className="font-mono font-bold">{k.score === null ? '-' : `${k.score.toFixed(1)}%`}</span>
+                    <p>{scoreStatus}</p>
+                  </div>}
                 </div>
 
                 <button className="text-slate-400 hover:text-emerald-600 p-1">
