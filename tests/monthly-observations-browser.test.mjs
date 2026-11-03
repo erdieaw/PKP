@@ -127,7 +127,10 @@ test('monthly observations through the real store and workspace, isolated API on
         await page.goto(`${origin}/observations-test?role=${control.role}`);
         await page.waitForFunction(() => window.fixture && !window.fixture.store.getLoadState().loading);
         await page.getByRole('combobox', { name: 'Bulan evaluasi', exact: true }).selectOption('8');
-        if (control.role !== 'PIC') await page.getByRole('button', { name: 'Input Capaian Bulanan', exact: true }).click();
+        if (control.role !== 'PIC') {
+          if (options.mobile) await page.getByRole('button', { name: 'Buka navigasi', exact: true }).click();
+          await page.getByRole('button', { name: 'Input Capaian Bulanan', exact: true }).click();
+        }
         if (!options.unassigned) await page.getByRole('button', { name: 'Observasi bulanan K1-R9', exact: true }).waitFor();
         if (!options.holdRead) await page.waitForFunction(() => ['loaded', 'error'].includes(window.fixture.store.getMonthlyObservationsLoad(8)?.status));
         await run({ page, rows, writes, reads, control, key, evidenceId });
@@ -263,10 +266,43 @@ test('monthly observations through the real store and workspace, isolated API on
       assert.equal(await editor(page).getByRole('combobox', { name: 'Jenis observasi' }).inputValue(), 'DOCUMENT');
       await editor(page).getByRole('button', { name: 'Tutup', exact: true }).click();
       const row = page.locator('tr').filter({ has: page.getByRole('button', { name: 'Observasi bulanan K1-R9', exact: true }) });
+      assert.equal(await row.getByRole('button', { name: 'Editor perhitungan lama' }).count(), 0);
+      await page.getByRole('button', { name: 'Tampilkan rincian penilaian', exact: true }).click();
       await row.getByRole('button', { name: 'Editor perhitungan lama' }).click();
       await page.getByRole('dialog', { name: 'Input DO 2026', exact: true }).waitFor();
       assert.equal(await page.getByRole('dialog', { name: 'Input DO 2026', exact: true }).getByRole('button', { name: 'Simpan', exact: true }).isDisabled(), true);
     }));
+    for (const mobile of [false, true]) {
+      await t.test(`monthly input keeps essential columns and reveals secondary details on ${mobile ? 'mobile' : 'desktop'}`, () => fixture({ mobile }, async ({ page, writes }) => {
+        const table = page.getByRole('table', { name: 'Input capaian bulanan', exact: true });
+        assert.equal(await table.getByRole('columnheader').count(), 5);
+        assert.equal(await page.getByRole('button', { name: 'Sinkronkan Semua ke Provinsi', exact: true }).count(), 0);
+        assert.equal(await page.getByRole('button', { name: 'Ajukan Laporan ke Dinkes', exact: true }).count(), 0);
+        assert.equal(await page.getByText('Status Sinkronisasi SIPKP Provinsi Jatim', { exact: true }).count(), 0);
+        const guidance = page.locator('details').filter({ has: page.locator('summary', { hasText: 'Panduan input dan status penilaian' }) });
+        assert.equal(await guidance.getAttribute('open'), null);
+        await guidance.locator('summary').focus(); await page.keyboard.press('Enter');
+        assert.equal(await guidance.getByText('Integrasi SIPKP Provinsi belum tersedia. Tidak ada pengiriman dari layar ini.', { exact: true }).isVisible(), true);
+        await guidance.locator('summary').click();
+        const toggle = page.getByRole('button', { name: 'Tampilkan rincian penilaian', exact: true });
+        assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+        await toggle.focus(); await page.keyboard.press('Enter');
+        assert.equal(await table.getByRole('columnheader').count(), 10);
+        assert.equal(await table.getByRole('columnheader', { name: 'Nilai Kinerja', exact: true }).isVisible(), true);
+        assert.equal(await table.getByRole('columnheader', { name: 'PIC Program', exact: true }).isVisible(), true);
+        assert.equal(await table.getByRole('columnheader', { name: 'Sinkronisasi Jatim', exact: true }).count(), 0);
+        assert.equal(await table.locator('tbody tr').evaluateAll(rows => rows.every(row => row.children.length === 10)), true);
+        await page.getByRole('button', { name: 'Sembunyikan rincian penilaian', exact: true }).click();
+        assert.equal(await table.locator('tbody tr').evaluateAll(rows => rows.every(row => row.children.length === 5)), true);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+        assert.equal(await page.getByRole('button', { name: /^Observasi bulanan / }).count(), 272);
+        assert.equal(writes.length, 0, 'Presentation changes never save or convert input');
+        if (process.env.PKP_INPUT_SCREENSHOTS) {
+          await page.locator('main').evaluate(el => { el.scrollTop = 0; });
+          await page.screenshot({ path: `/tmp/opencode/monthly-input-${mobile ? 'mobile' : 'desktop'}.png` });
+        }
+      }));
+    }
     await t.test('document false is saved separately, revisions persist across page reload and do not change scores', () => fixture({}, async ({ page, writes, reads }) => {
       assert.equal(await page.getByRole('status').filter({ hasText: 'Observasi bulan ini sudah dimuat. Catatan ini tidak mengubah skor.' }).isVisible(), true);
       let dialog = await open(page);
