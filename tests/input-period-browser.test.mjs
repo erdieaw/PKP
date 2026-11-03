@@ -194,7 +194,7 @@ test('input period through real AppLayout, Header, grid and drawer (isolated API
       const panel = drawer(page);
       await panel.getByText('Kumulatif Januari sampai Maret 2026 (TW 1)', { exact: true }).waitFor();
       await panel.getByRole('status').filter({ hasText: /rincian kumulatif triwulan/ }).waitFor();
-      assert.equal(await page.getByText('Periksa periode pada setiap hasil kumulatif; hasil tersebut bukan data satu bulan saja.', { exact: false }).isVisible(), true);
+      assert.equal(await page.getByText('Kumulatif Januari sampai akhir Maret, hanya baca. Data kumulatif tidak dijumlahkan lagi antarbulan.', { exact: true }).isVisible(), true);
       assert.equal(await panel.locator('input, textarea').count(), 0);
       assert.equal(await panel.getByRole('button', { name: /Simpan|Edit capaian/ }).count(), 0);
       // The annual trend may still display August; only the inspection/input context is TW1.
@@ -240,6 +240,24 @@ test('input period through real AppLayout, Header, grid and drawer (isolated API
         } finally { await f.close(); }
       });
     }
+
+    await t.test('assessment detail toggle preserves a dirty monthly input without saving or changing scope', async () => {
+      const f = await fixture();
+      try {
+        const { page } = f;
+        await grid(page);
+        await page.getByRole('button', { name: /^Edit realisasi 5\.1\.1,/ }).click();
+        const input = page.getByRole('spinbutton', { name: /^Realisasi 5\.1\.1,/ });
+        await input.fill('909');
+        const requestCount = f.requests.length;
+        await page.getByRole('button', { name: 'Tampilkan rincian penilaian', exact: true }).click();
+        assert.equal(await input.inputValue(), '909');
+        await page.getByRole('button', { name: 'Sembunyikan rincian penilaian', exact: true }).click();
+        assert.equal(await input.inputValue(), '909');
+        assert.equal(await monthSelect(page).inputValue(), '8');
+        assert.equal(f.requests.length, requestCount, 'Showing details does not reload or write data');
+      } finally { await f.close(); }
+    });
 
     await t.test('desktop hamburger hides and reopens the sidebar without discarding input or changing scope', async () => {
       const f = await fixture();
