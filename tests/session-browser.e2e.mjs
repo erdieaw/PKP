@@ -85,7 +85,7 @@ function sequence(expected) {
 
 async function ready() {
   await page.waitForFunction(centerId => {
-    const year = document.querySelector('select[aria-label="Tahun anggaran"]');
+    const year = document.querySelector('select[aria-label="Tahun pelaporan"]');
     const center = document.querySelector('select[aria-label="Puskesmas"]');
     return year?.value === '2026' && !year.disabled && center?.value === centerId;
   }, fixture.healthCenterId);
@@ -94,7 +94,7 @@ async function ready() {
 
 async function login() {
   assert.equal(await page.getByRole('group', { name: 'Peran akun' }).count(), 0);
-  await page.getByLabel(/Username|ID Staf/).fill(fixture.adminUsername);
+  await page.getByLabel('Nama pengguna', { exact: true }).fill(fixture.adminUsername);
   await page.getByLabel('Kata sandi', { exact: true }).fill(password);
   async function submit() {
     const loggedIn = page.waitForResponse(response =>
@@ -188,7 +188,7 @@ try {
     const before = { year: pkpStore.getCurrentYear(), center: pkpStore.getSelectedHealthCenterId() };
     let disabledObserved = false;
     const observe = () => {
-      const labels = ['Tahun anggaran', 'Puskesmas', 'Bulan evaluasi'];
+      const labels = ['Tahun pelaporan', 'Puskesmas', 'Bulan evaluasi'];
       if (pkpStore.isMutating() && labels.every(label => document.querySelector(`select[aria-label="${label}"]`)?.disabled)) disabledObserved = true;
     };
     const observer = new MutationObserver(observe);

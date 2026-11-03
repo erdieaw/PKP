@@ -15,9 +15,9 @@ const data = payload => payload?.data ?? payload;
 const items = payload => Array.isArray(payload) ? payload : payload.items;
 
 async function ready(page) {
-  await page.getByLabel('Tahun anggaran', { exact: true }).waitFor();
+  await page.getByLabel('Tahun pelaporan', { exact: true }).waitFor();
   await page.waitForFunction(() => {
-    const year = document.querySelector('select[aria-label="Tahun anggaran"]');
+    const year = document.querySelector('select[aria-label="Tahun pelaporan"]');
     const center = document.querySelector('select[aria-label="Puskesmas"]');
     return year?.value === '2026' && !year.disabled && Boolean(center?.value);
   });
@@ -40,7 +40,7 @@ async function login(username, role) {
   });
   await page.goto(frontend);
   assert.equal(await page.getByRole('group', { name: 'Peran akun' }).count(), 0);
-  await page.getByLabel(/Username|ID Staf/).fill(username);
+  await page.getByLabel('Nama pengguna', { exact: true }).fill(username);
   await page.getByLabel('Kata sandi', { exact: true }).fill(password);
   const responsePromise = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/auth/login') && response.request().method() === 'POST');
   await page.locator('form button[type="submit"]').click();
@@ -169,8 +169,8 @@ try {
   stage = 'PIC permissions';
   const { context: picContext, page: pic } = await login('fe.pic', 'Staf PIC');
   assert.equal(await pic.getByRole('button', { name: 'Target Sasaran Tahunan', exact: true }).count(), 0);
-  assert.equal(await pic.getByRole('button', { name: 'Pusat Data Master (CRUD)', exact: true }).count(), 0);
-  assert.equal(await pic.getByRole('button', { name: 'Setting / Penugasan PIC', exact: true }).count(), 0);
+  assert.equal(await pic.getByRole('button', { name: 'Pengelolaan Data', exact: true }).count(), 0);
+  assert.equal(await pic.getByRole('button', { name: 'Penugasan PIC', exact: true }).count(), 0);
   await pic.getByRole('heading', { name: 'Indikator Saya', exact: true }).waitFor();
   assert.equal(await pic.locator('nav button').count(), 2);
   assert.equal(await pic.getByRole('button', { name: 'Input Capaian Bulanan', exact: true }).count(), 0);

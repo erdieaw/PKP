@@ -14,7 +14,8 @@ import {
   Printer,
   FileCheck2,
   CalendarRange,
-  X
+  X,
+  Menu
 } from 'lucide-react';
 import { pkpStore } from '../../services/apiStore';
 import { UserRole } from '../../types/pkp';
@@ -43,6 +44,7 @@ interface SidebarProps {
   busy: boolean;
   selectedPuskesmas: string;
   onClose: () => void;
+  onCollapse: () => void;
   onOpenYearModal: () => void;
   onOpenStaffModal: () => void;
   onOpenExportModal: () => void;
@@ -59,6 +61,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   busy,
   selectedPuskesmas,
   onClose,
+  onCollapse,
   onOpenYearModal,
   onOpenStaffModal,
   onOpenExportModal
@@ -69,16 +72,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'dashboard-pic' as NavTab, label: 'Indikator Saya', icon: ClipboardPen },
     { id: 'recommendations' as NavTab, label: 'Rekomendasi & RTL', icon: MessageSquareCheck },
   ] : [
-    { id: 'dashboard-exec' as NavTab, label: 'Dashboard Kinerja PKP', icon: LayoutDashboard },
+    { id: 'dashboard-exec' as NavTab, label: 'Ringkasan Kinerja PKP', icon: LayoutDashboard },
     { id: 'official-sheet7' as NavTab, label: 'Rekap Kinerja (Sheet 7)', icon: FileCheck2 },
-    { id: 'dashboard-annual' as NavTab, label: 'Dashboard Tahunan (12 Bln)', icon: CalendarRange },
-    { id: 'dashboard-pic' as NavTab, label: 'Dashboard PIC & Kepatuhan', icon: Users },
+    { id: 'dashboard-annual' as NavTab, label: 'Tren Kinerja Bulanan', icon: CalendarRange },
+    { id: 'dashboard-pic' as NavTab, label: 'Pemantauan PIC', icon: Users },
     { id: 'data-entry' as NavTab, label: 'Input Capaian Bulanan', icon: ClipboardPen },
     { id: 'target-setting' as NavTab, label: 'Target Sasaran Tahunan', icon: Target },
-    { id: 'pic-matrix' as NavTab, label: 'Setting / Penugasan PIC', icon: UserCheck },
+    { id: 'pic-matrix' as NavTab, label: 'Penugasan PIC', icon: UserCheck },
     { id: 'recommendations' as NavTab, label: 'Rekomendasi Dinkes & RTL', icon: MessageSquareCheck },
-    { id: 'master-data' as NavTab, label: 'Pusat Data Master (CRUD)', icon: Building2 },
-    ...(isDinkesMode ? [{ id: 'dinkes-supervision' as NavTab, label: 'Supervisi Se-Wilayah (Ranking)', icon: Trophy }] : [])
+    { id: 'master-data' as NavTab, label: 'Pengelolaan Data', icon: Building2 },
+    ...(isDinkesMode ? [{ id: 'dinkes-supervision' as NavTab, label: 'Supervisi Wilayah', icon: Trophy }] : [])
   ];
 
   const allIndicators = pkpStore.getIndicators();
@@ -95,8 +98,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <aside className="w-72 min-w-[288px] max-w-[288px] bg-gradient-to-b from-obsidian-950 via-obsidian-900 to-obsidian-950 text-slate-300 flex flex-col flex-shrink-0 h-screen sticky top-0 border-r border-obsidian-800/80 shadow-2xl relative z-20 overflow-hidden">
       {/* Brand Header with AppLogo */}
       <div className="p-4 border-b border-obsidian-800/80 bg-obsidian-950/60 backdrop-blur-md">
-        <button type="button" onClick={onClose} aria-label="Tutup navigasi" className="md:hidden absolute top-3 right-3 p-2 rounded-lg hover:bg-slate-800"><X className="w-4 h-4" /></button>
-        <AppLogo variant="compact" size="md" />
+        <div className="flex items-center justify-between gap-2">
+          <AppLogo variant="compact" size="md" />
+          <button type="button" onClick={onCollapse} aria-label="Sembunyikan navigasi" title="Sembunyikan navigasi" aria-expanded="true" aria-controls="app-sidebar" className="hidden md:inline-flex shrink-0 p-2 rounded-lg hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-emerald-400"><Menu className="w-4 h-4" /></button>
+          <button type="button" onClick={onClose} aria-label="Tutup navigasi" aria-controls="app-sidebar" className="md:hidden shrink-0 p-2 rounded-lg hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-emerald-400"><X className="w-4 h-4" /></button>
+        </div>
 
         {/* Live System Badge */}
         <div className="mt-3 flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-obsidian-850/90 border border-obsidian-700/60 text-[10px]">
@@ -148,7 +154,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Action Utilities (Year, Staff, Export) */}
         {userRole !== 'PIC' && <div className="pt-2 border-t border-slate-800">
           <p className="px-3 text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">
-            Utilitas & Konfigurasi
+            Pengaturan dan Laporan
           </p>
           <div className="space-y-1">
             {userRole === 'DINKES_ADMIN' && <button
@@ -157,7 +163,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg text-xs text-slate-300 hover:bg-slate-800 hover:text-white transition-colors"
             >
               <CalendarDays className="w-4 h-4 text-emerald-400" />
-              <span>Kelola Periode Tahun</span>
+              <span>Kelola Tahun Pelaporan</span>
             </button>}
             <button
               onClick={onOpenStaffModal}
@@ -207,10 +213,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {userRole !== 'PIC' && <div className="p-3 bg-obsidian-850/80 rounded-xl border border-obsidian-700/60 text-xs shadow-inner">
           <div className="flex items-center gap-2 text-emerald-400 font-bold mb-1">
             <FileSpreadsheet className="w-3.5 h-3.5" />
-            <span className="text-[11px] tracking-wide">Integritas Kode Provinsi</span>
+            <span className="text-[11px] tracking-wide">Katalog Indikator</span>
           </div>
           <p className="text-[11px] text-slate-400 leading-relaxed">
-            Katalog {allIndicators.length} indikator dari server SIPKP untuk periode terpilih.
+             {allIndicators.length} indikator untuk periode yang dipilih.
           </p>
         </div>}
       </div>
@@ -219,7 +225,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="p-3.5 border-t border-obsidian-800/80 bg-obsidian-950/80 text-[11px] text-slate-400 flex items-center justify-between">
         <span className="flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-sm shadow-emerald-400" />
-          <span className="font-medium text-slate-300">TLS 1.3 Terenkripsi</span>
+          <span className="font-medium text-slate-300">Tahun pelaporan</span>
         </span>
         <span className="font-mono text-[10px] text-emerald-400 bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-500/30">TA {currentYear}</span>
       </div>

@@ -42,7 +42,7 @@ export function MonthlyObservationEditor({ indicator, year, month, onClose }: Pr
   function scopeReason() {
     if (context.user !== pkpStore.getSessionUser() || context.center !== pkpStore.getSelectedHealthCenterId() ||
       context.year !== pkpStore.getCurrentYear() || year !== context.year || month !== context.month || indicator.id !== context.indicatorId) {
-      return 'Sesi atau lingkup berubah. Tutup dan buka kembali observasi.';
+      return 'Akun, Puskesmas, atau periode yang dipilih telah berubah. Tutup formulir ini, lalu buka kembali observasi.';
     }
     return null;
   }
@@ -92,7 +92,7 @@ export function MonthlyObservationEditor({ indicator, year, month, onClose }: Pr
     if (((status !== 'RECORDED' || kind === 'NOTE') && !meaningful(notes)) ||
       (status === 'RECORDED' && numeric && (!validNumber(value) || !meaningful(unit) || (kind === 'RATIO' && !validNumber(denominator)))) ||
       (status === 'RECORDED' && kind === 'DOCUMENT' && documentAvailable === '')) {
-      setError('Lengkapi isian sesuai jenis dan status. Angka 0 dan dokumen tidak tersedia berbeda dari isian kosong; catatan alasan wajib untuk status tanpa data.');
+      setError('Periksa isian: angka memerlukan nilai dan satuan, rasio juga memerlukan penyebut, dan dokumen memerlukan status ketersediaan. Isi catatan jika memilih catatan saja atau status selain Dicatat. Gunakan 0 untuk nilai nol, bukan isian kosong.');
       return;
     }
     busy.current = true; setPending(true); setError(null); setSuccess(false);
@@ -120,7 +120,7 @@ export function MonthlyObservationEditor({ indicator, year, month, onClose }: Pr
       if (active.current) {
         if (failure instanceof ApiError && failure.status === 409) {
           setConflict(true);
-          setError('Observasi berubah atau periode dikunci di sesi lain. Isian Anda belum disimpan. Muat ulang, tinjau data terbaru, lalu isi kembali; tidak ada penimpaan otomatis.');
+          setError('Data telah berubah atau periode dikunci saat formulir ini terbuka. Isian Anda belum disimpan. Muat ulang untuk melihat data terbaru, lalu periksa dan isi kembali.');
         } else setError(failure instanceof Error ? failure.message : 'Penyimpanan gagal. Isian tetap tersedia untuk dicoba kembali.');
       }
     } finally {
@@ -145,16 +145,16 @@ export function MonthlyObservationEditor({ indicator, year, month, onClose }: Pr
         <h2 id="monthly-observation-title" className="text-base font-bold">Observasi bulanan</h2>
         <p className="mt-1 break-words text-sm">{indicator.indikator}</p>
         <p className="mt-1 text-xs text-slate-600">{context.centerName} / {monthPeriodLabel(year, month)}</p>
-        <p className="mt-2 text-xs text-slate-600">Catatan mentah bulan ini, bukan skor, keputusan tidak berlaku, atau penilaian tahunan. Tidak dijumlahkan otomatis ke rekap.</p>
+        <p className="mt-2 text-xs text-slate-600">Catat angka, ketersediaan dokumen, atau keterangan bulan ini. Observasi tidak menghasilkan skor, menetapkan indikator tidak berlaku, atau melengkapi penilaian tahunan. Data tidak dijumlahkan otomatis ke rekap.</p>
       </header>
       {reason && <p role="status" className="text-sm text-amber-900">{reason}</p>}
       {loading && <p role="status">Memuat observasi tersimpan...</p>}
       {error && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">{error}</p>}
-      {success && <p role="status" className="text-sm text-emerald-800">Observasi bulanan tersimpan di server. Revisi {stored?.revision}.</p>}
+      {success && <p role="status" className="text-sm text-emerald-800">Observasi bulanan berhasil disimpan. Revisi {stored?.revision}.</p>}
       <fieldset disabled={blocked} className="space-y-3 disabled:opacity-70">
         <label className="block text-sm font-medium">Jenis observasi
           <select autoFocus className={fieldClass} value={kind} onChange={event => { setKind(event.target.value as ObservationKind); setSuccess(false); }}>
-            <option value="NUMBER">Angka</option><option value="DOCUMENT">Dokumen</option><option value="RATIO">Rasio mentah (N/D)</option><option value="NOTE">Catatan saja</option>
+            <option value="NUMBER">Angka</option><option value="DOCUMENT">Dokumen</option><option value="RATIO">Pembilang dan penyebut (N/D)</option><option value="NOTE">Catatan saja</option>
           </select>
         </label>
         <label className="block text-sm font-medium">Status bulan ini
@@ -172,7 +172,7 @@ export function MonthlyObservationEditor({ indicator, year, month, onClose }: Pr
           <label className="block text-sm font-medium">Satuan
             <input className={fieldClass} maxLength={100} value={unit} onChange={event => setUnit(event.target.value)} />
           </label>
-          {kind === 'RATIO' && <p className="text-xs text-slate-600">N/D disimpan apa adanya, termasuk D = 0; tidak dihitung menjadi persen, skor, atau nihil terverifikasi.</p>}
+          {kind === 'RATIO' && <p className="text-xs text-slate-600">Pembilang (N) dan penyebut (D) disimpan sesuai isian, termasuk penyebut 0. Angka ini tidak diubah menjadi persentase atau skor. Penyebut 0 tidak berarti nihil kasus telah terverifikasi.</p>}
         </>}
         {status === 'RECORDED' && kind === 'DOCUMENT' && <label className="block text-sm font-medium">Ketersediaan dokumen
           <select className={fieldClass} value={documentAvailable} onChange={event => setDocumentAvailable(event.target.value)}>
@@ -191,7 +191,7 @@ export function MonthlyObservationEditor({ indicator, year, month, onClose }: Pr
               <input className="mt-1 block w-full text-xs" type="file" accept=".pdf,.png,.jpg,.jpeg,.xlsx" onChange={event => {
                 const selected = event.target.files?.[0]; event.target.value = '';
                 if (!selected) return;
-                if (!selected.size || selected.size > 10 * 1024 * 1024) { setError('Ukuran bukti harus 1 byte sampai 10 MiB.'); return; }
+                if (!selected.size || selected.size > 10 * 1024 * 1024) { setError('File bukti tidak boleh kosong atau lebih dari 10 MiB. Pilih file lain.'); return; }
                 setFile(selected); setUploaded(undefined); setSuccess(false);
               }} />
             </label>
@@ -219,7 +219,7 @@ export function MonthlyObservationAction({ indicator, year, month }: Omit<Props,
   const row = pkpStore.getMonthlyObservation(indicator.id, month, year);
   const reason = getMonthlyInputBlockReason(year, month, indicator.id);
   return <div className="mt-2 space-y-1 text-left" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
-    {row && <p className="break-words text-xs text-slate-700">Observasi: {observationText(row)} <span className="text-slate-500">(mentah, rev. {row.revision})</span></p>}
+    {row && <p className="break-words text-xs text-slate-700">Observasi: {observationText(row)} <span className="text-slate-500">(belum dinilai, revisi {row.revision})</span></p>}
     <button type="button" disabled={pkpStore.isMutating()} title={reason ?? undefined}
       onClick={() => { if (confirmDiscardChanges()) { setOpenedScope(scope); setOpen(true); } }}
       aria-label={`Observasi bulanan ${indicator.id}`}
@@ -245,7 +245,7 @@ export function MonthlyObservationsLoad({ year, month }: { year: number; month: 
     <button type="button" disabled={!ready || loading || pkpStore.isMutating()} className="min-h-9 text-emerald-800 underline disabled:opacity-50"
       onClick={() => { void pkpStore.fetchMonthlyObservations(year, month).catch(() => {}); }}>
       {loading ? 'Memuat observasi...' : 'Muat observasi bulan ini'}</button>
-    {state?.status === 'loaded' ? <p role="status">Observasi bulan ini dimuat, terpisah dari skor.</p>
-      : <p role={state?.status === 'error' ? 'alert' : 'status'}>{state?.status === 'error' ? `Observasi gagal dimuat: ${state.error}. Coba muat ulang.` : loading ? 'Memuat observasi bulan ini.' : 'Observasi bulan ini belum dimuat.'} Status pengisian belum dapat dipastikan; isian angka lama tetap tersedia.</p>}
+    {state?.status === 'loaded' ? <p role="status">Observasi bulan ini sudah dimuat. Catatan ini tidak mengubah skor.</p>
+      : <p role={state?.status === 'error' ? 'alert' : 'status'}>{state?.status === 'error' ? `Observasi gagal dimuat: ${state.error}. Pilih Muat observasi bulan ini untuk mencoba lagi.` : loading ? 'Memuat observasi bulan ini.' : 'Observasi bulan ini belum dimuat.'} Status pengisian belum dapat dipastikan. Isian angka sebelumnya tetap tersedia.</p>}
   </div>;
 }

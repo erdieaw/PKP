@@ -61,7 +61,7 @@ test('login Turnstile lifecycle and responsive states', async t => {
           };`,
       }));
       await page.goto(origin);
-      await page.getByLabel('Username', { exact: true }).fill('fixture-user');
+      await page.getByLabel('Nama pengguna', { exact: true }).fill('fixture-user');
       await page.getByLabel('Kata sandi', { exact: true }).fill('fixture-password');
       return { page, attempts, exceptions, configRequests, recover: () => { scriptBlocked = false; configBlocked = false; } };
     }
@@ -89,6 +89,7 @@ test('login Turnstile lifecycle and responsive states', async t => {
         await page.evaluate(() => window.fixtureOptions.callback('fixture-token'));
         await page.locator('button[type="submit"]').click();
         await page.getByRole('alert').waitFor();
+        assert.equal(await page.getByRole('alert').innerText(), 'Nama pengguna atau kata sandi salah. Periksa kembali dan coba lagi. Jika tetap tidak bisa masuk, hubungi Admin Puskesmas atau Dinkes.');
         await page.waitForFunction(() => window.fixtureRenders >= 2 && window.fixtureRemovals >= 1);
         assert.deepEqual(attempts, [{ username: 'fixture-user', password: 'fixture-password', turnstileToken: 'fixture-token' }]);
         assert.equal(await page.locator('button[type="submit"]').isDisabled(), true);

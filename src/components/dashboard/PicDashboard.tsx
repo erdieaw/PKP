@@ -195,15 +195,15 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
         <div>
           <div className="flex items-center gap-2 text-emerald-600 font-bold text-xs uppercase tracking-wider mb-1">
             <Users className="w-4 h-4" />
-            <span>Monitoring Kepatuhan & Realisasi per PIC</span>
+            <span>Pengisian dan capaian indikator</span>
           </div>
           <h2 className="text-xl font-bold text-slate-800">
-            Dashboard Penanggung Jawab (PIC)
+            Pemantauan Penanggung Jawab (PIC)
           </h2>
           <p className="mt-1 text-sm font-medium text-emerald-800">Periode data: {periodLabel}</p>
           <p className="mt-1 break-words text-sm text-slate-600">Puskesmas: {healthCenter?.name ?? 'Belum dipilih'}</p>
           <p className="text-xs text-slate-500">
-            Pantau beban kerja, progress entri bulanan, dan capaian target untuk setiap staf pengelola program.
+            Lihat indikator yang ditugaskan, isian bulanan, dan capaian tiap PIC.
           </p>
         </div>
 
@@ -236,21 +236,21 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
               title="Kirim pengingat input WhatsApp"
             >
               <PhoneCall className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Ingatkan WA</span>
+              <span className="hidden sm:inline">Ingatkan lewat WhatsApp</span>
             </a>
           )}
         </div>
       </div>
       {readOnlyNotice}
-      <p className="text-sm text-slate-600">Status input mencakup observasi mentah atau isian angka, bukan kelengkapan penilaian. Observasi tidak mengubah skor atau rekap.</p>
+      <p className="text-sm text-slate-600">Status pengisian mencakup catatan bulanan atau isian angka. Sudah diisi bukan berarti penilaian lengkap. Catatan bulanan tidak mengubah skor atau rekap.</p>
       <MonthlyObservationsLoad key={`${currentUser.id}:${currentYear}:${selectedMonth}:${healthCenter?.id}`} year={currentYear} month={selectedMonth} />
 
       {/* KPI Cards Row */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-          <span className="text-[11px] font-semibold text-slate-500 uppercase">Indikator Diampu</span>
+          <span className="text-[11px] font-semibold text-slate-500 uppercase">Indikator Ditugaskan</span>
           <div className="text-2xl font-bold font-mono text-slate-800 mt-1">{totalAssigned}</div>
-          <span className="text-[11px] text-slate-400">Total Elemen Penilaian</span>
+          <span className="text-[11px] text-slate-400">Sesuai pilihan PIC</span>
         </div>
 
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
@@ -264,12 +264,12 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
         </div>
 
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-          <span className="text-[11px] font-semibold text-slate-500 uppercase">Sinkron Provinsi</span>
+          <span className="text-[11px] font-semibold text-slate-500 uppercase">Integrasi Provinsi</span>
           <div className="text-2xl font-bold font-mono text-teal-600 mt-1">
             -
           </div>
           <span className="text-[11px] text-teal-700 font-medium">
-            Integrasi belum tersedia
+            Status tidak ditampilkan di sini
           </span>
         </div>
 
@@ -418,7 +418,7 @@ export const PicDashboard: React.FC<PicDashboardProps> = ({ selectedMonth, onOpe
 
                     {/* Final Score */}
                     <td className="py-2.5 px-3 text-center align-top">
-                      {isV2 ? <span className="text-slate-700">{measurementText(record.nilaiKinerja, 'SCORE')}<span className="mt-1 block text-[10px] text-slate-500">V2 provisional</span></span> : <ScoreBadge score={record.nilaiKinerja} size="sm" />}
+                      {isV2 ? <span className="text-slate-700">{measurementText(record.nilaiKinerja, 'SCORE')}<span className="mt-1 block text-[10px] text-slate-500">DO 2026: hasil sementara</span></span> : <ScoreBadge score={record.nilaiKinerja} size="sm" />}
                     </td>
 
                     {/* Status Sinkronisasi Provinsi */}

@@ -295,7 +295,7 @@ test('PIC dashboard period and input-basis presentation with an isolated store',
             assert.equal(await page.getByRole('region', { name: 'Hasil rekap indikator' }).count(), 0);
             assert.equal(await selector.isDisabled(), true);
             assert.deepEqual(await selector.locator('option').allTextContents(), ['Tidak ada indikator yang cocok']);
-            await page.getByRole('button', { name: 'Muat ulang rekap dari server', exact: true }).click();
+            await page.getByRole('button', { name: 'Muat ulang rekap', exact: true }).click();
             await page.getByRole('status').filter({ hasText: 'Tidak ada indikator rekap yang ditugaskan kepada Anda' }).waitFor();
             assert.equal(await page.getByRole('region', { name: 'Hasil rekap indikator' }).count(), 0);
           }

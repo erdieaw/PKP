@@ -18,7 +18,7 @@ export const ScoreBadge: React.FC<ScoreBadgeProps> = ({ score, size = 'sm', prov
   if (provisional) {
     colorClasses = 'bg-slate-100 text-slate-700 border-slate-200';
     dotColor = 'bg-slate-400';
-    label = 'provisional';
+    label = 'sementara';
   } else if (!hasScore) {
     colorClasses = 'bg-slate-100 text-slate-600 border-slate-200';
     dotColor = 'bg-slate-400';

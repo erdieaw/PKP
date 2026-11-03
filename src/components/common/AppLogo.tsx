@@ -41,13 +41,13 @@ export const AppLogo: React.FC<AppLogoProps> = ({
         </svg>
         <div className="text-left font-serif">
           <div className="font-black text-sm tracking-widest text-slate-900 uppercase">
-            SIPKP PULSE
+            SIPKP
           </div>
           <div className="text-[10px] text-slate-700 font-bold uppercase tracking-wider">
-            Integrasi Layanan Primer (ILP)
+            Penilaian Kinerja Puskesmas
           </div>
           <div className="text-[9px] text-slate-500 italic">
-            Standar Akreditasi & Mutu Faskes
+            Sistem Informasi PKP
           </div>
         </div>
       </div>
@@ -117,9 +117,6 @@ export const AppLogo: React.FC<AppLogoProps> = ({
             <span className={`font-black tracking-tight text-white ${sz.text}`}>
               SIPKP
             </span>
-            <span className="font-extrabold tracking-tight bg-gradient-to-r from-emerald-400 via-teal-300 to-cyan-400 bg-clip-text text-transparent">
-              PULSE
-            </span>
             <span className={`font-mono font-bold px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 ${sz.badge}`}>
               ILP 2026
             </span>
@@ -127,13 +124,13 @@ export const AppLogo: React.FC<AppLogoProps> = ({
 
           {(variant === 'full' || subtitle) && (
             <p className={`text-slate-400 mt-1 font-medium tracking-tight ${sz.sub}`}>
-              {subtitle || 'Platform Pengawasan Mutu & Kinerja Puskesmas Terpadu'}
+              {subtitle || 'Sistem Informasi Penilaian Kinerja Puskesmas'}
             </p>
           )}
 
           {variant === 'compact' && !subtitle && (
             <span className="text-[10px] text-slate-400 font-medium tracking-tight mt-0.5">
-              Integrasi Layanan Primer • Jatim Bridge
+              Penilaian Kinerja Puskesmas
             </span>
           )}
         </div>

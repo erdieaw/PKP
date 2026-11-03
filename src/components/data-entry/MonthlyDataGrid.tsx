@@ -292,8 +292,8 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
         </p>
       </div>
       <PeriodRecapPanel key={`${currentYear}:${selectedCenter}:${selectedMonth}`} year={currentYear} month={selectedMonth} />
-      <p className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">DO 2026 masih provisional: skor yang tersedia berasal dari rubrik sumber; kategori dan rekap resmi belum disahkan. Tampilan bulanan dapat memuat observasi YTD berlabel kumulatif, bukan capaian bulan mandiri.</p>
-      <p className="text-xs text-slate-600">Semua indikator dapat dicatat tiap bulan melalui Observasi / catatan bulanan. Observasi mentah terpisah dari realisasi dan skor lama, tanpa penilaian tahunan otomatis.</p>
+      <p className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">Hasil berdasarkan Definisi Operasional (DO) 2026 masih sementara. Skor yang tersedia mengikuti rubrik sumber; kategori dan rekap resmi belum disahkan. Periksa periode pada setiap hasil kumulatif; hasil tersebut bukan data satu bulan saja.</p>
+      <p className="text-xs text-slate-600">Gunakan Observasi / catatan bulanan untuk mencatat setiap indikator. Catatan ini terpisah dari realisasi dan skor sebelumnya; tidak otomatis menjadi penilaian tahunan.</p>
       {!isQuarterMode && <MonthlyObservationsLoad key={`${currentUser?.id}:${currentYear}:${selectedMonth}:${selectedCenter}`} year={currentYear} month={selectedMonth} />}
       {observationId && !isQuarterMode && indicators.filter(ind => ind.id === observationId).map(ind => (
         <MonthlyObservationEditor key={`${ind.id}:${currentYear}:${selectedMonth}:${selectedCenter}`} indicator={ind} year={currentYear} month={selectedMonth} onClose={() => setObservationId(null)} />
@@ -331,8 +331,8 @@ export const MonthlyDataGrid: React.FC<MonthlyDataGridProps> = ({
             </div>
             <p className="text-xs text-slate-500">
               {isQuarterMode 
-                ? `Kumulatif ${periodLabel}. Hasil backend mengikuti versi dan basis data; YTD tidak dijumlahkan antarbulan.`
-                : 'Mode Bulanan: DO 2026 memakai N/D aktual dan basis periode; data V1 tetap kompatibilitas historis.'}
+                ? `Kumulatif ${periodLabel}. Data yang sudah kumulatif tidak dijumlahkan lagi antarbulan. Cara hitung mengikuti versi aturan dan periode data.`
+                : 'Tampilan bulanan: perhitungan DO 2026 memakai pembilang dan penyebut aktual sesuai periode. Data versi lama (V1) tetap ditampilkan sesuai perhitungan sebelumnya.'}
             </p>
           </div>
         </div>

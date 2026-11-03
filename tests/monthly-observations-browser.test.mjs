@@ -143,7 +143,7 @@ test('monthly observations through the real store and workspace, isolated API on
     }
     async function save(page) {
       await editor(page).getByRole('button', { name: 'Simpan observasi', exact: true }).click();
-      await editor(page).getByRole('status').filter({ hasText: 'tersimpan di server' }).waitFor();
+      await editor(page).getByRole('status').filter({ hasText: 'Observasi bulanan berhasil disimpan.' }).waitFor();
     }
     const observedRow = (id = 'K1-R9', month = 8, center = 'center-a') => ({ indicatorId: id, year: 2026, month, healthCenterId: center,
       revision: 1, kind: 'DOCUMENT', status: 'RECORDED', documentAvailable: false, notes: '', value: null, denominator: null, unit: null });
@@ -213,16 +213,16 @@ test('monthly observations through the real store and workspace, isolated API on
     });
     await t.test('admin reminders wait for observations and stay absent when all raw rows are filled', () => fixture({ roster: true, observations: catalogue.indicators.map(indicator => observedRow(indicator.id)) }, async ({ page, control }) => {
       let release; control.holdRead = new Promise(resolve => { release = resolve; });
-      await page.getByRole('button', { name: 'Dashboard PIC & Kepatuhan', exact: true }).click();
+      await page.getByRole('button', { name: 'Pemantauan PIC', exact: true }).click();
       await page.getByLabel('Pilih PIC:', { exact: true }).selectOption('fixture-user');
       await page.getByText('Status pengisian belum diketahui', { exact: true }).waitFor();
-      assert.equal(await page.getByRole('link', { name: 'Ingatkan WA' }).count(), 0);
+      assert.equal(await page.getByRole('link', { name: 'Ingatkan lewat WhatsApp', exact: true }).count(), 0);
       control.holdRead = null; release();
       await page.getByText('100% Terisi', { exact: true }).waitFor();
-      assert.equal(await page.getByRole('link', { name: 'Ingatkan WA' }).count(), 0);
+      assert.equal(await page.getByRole('link', { name: 'Ingatkan lewat WhatsApp', exact: true }).count(), 0);
       control.failRead = true; await page.getByRole('button', { name: 'Muat observasi bulan ini', exact: true }).click();
       await page.getByRole('alert').filter({ hasText: 'Observasi gagal dimuat' }).waitFor();
-      assert.equal(await page.getByRole('link', { name: 'Ingatkan WA' }).count(), 0);
+      assert.equal(await page.getByRole('link', { name: 'Ingatkan lewat WhatsApp', exact: true }).count(), 0);
       control.failRead = false;
     }));
     await t.test('initial automatic read failure does not disable legacy numeric controls or claim missing observations', () => fixture({ role: 'PIC', legacyRestricted: true, failRead: true }, async ({ page, control }) => {
@@ -250,7 +250,7 @@ test('monthly observations through the real store and workspace, isolated API on
       await page.getByRole('combobox', { name: 'Puskesmas', exact: true }).selectOption('center-b');
       await page.waitForFunction(() => window.fixture.store.getSelectedHealthCenterId() === 'center-b' && window.fixture.store.getMonthlyObservationsLoad(9)?.status === 'loaded');
       assert.equal(await page.getByText(/Observasi: Dokumen tersedia/).count(), 0);
-      await page.getByRole('combobox', { name: 'Tahun anggaran', exact: true }).selectOption('2025');
+      await page.getByRole('combobox', { name: 'Tahun pelaporan', exact: true }).selectOption('2025');
       await page.waitForFunction(() => window.fixture.store.getCurrentYear() === 2025 && window.fixture.store.getMonthlyObservationsLoad(9)?.status === 'loaded');
       assert.equal(await page.evaluate(() => window.fixture.store.getMonthlyObservation('K1-R9', 9)), undefined);
     }));
@@ -268,7 +268,9 @@ test('monthly observations through the real store and workspace, isolated API on
       assert.equal(await page.getByRole('dialog', { name: 'Input DO 2026', exact: true }).getByRole('button', { name: 'Simpan', exact: true }).isDisabled(), true);
     }));
     await t.test('document false is saved separately, revisions persist across page reload and do not change scores', () => fixture({}, async ({ page, writes, reads }) => {
+      assert.equal(await page.getByRole('status').filter({ hasText: 'Observasi bulan ini sudah dimuat. Catatan ini tidak mengubah skor.' }).isVisible(), true);
       let dialog = await open(page);
+      assert.equal(await dialog.getByText('Catat angka, ketersediaan dokumen, atau keterangan bulan ini. Observasi tidak menghasilkan skor, menetapkan indikator tidak berlaku, atau melengkapi penilaian tahunan. Data tidak dijumlahkan otomatis ke rekap.', { exact: true }).isVisible(), true);
       await dialog.getByRole('button', { name: 'Simpan observasi', exact: true }).click();
       await dialog.getByRole('alert').waitFor(); assert.equal(writes.length, 0);
       await dialog.getByLabel('Ketersediaan dokumen').selectOption('false');
@@ -317,7 +319,7 @@ test('monthly observations through the real store and workspace, isolated API on
       const dialog = await open(page); await dialog.getByLabel('Ketersediaan dokumen').selectOption('true');
       rows.set(key(2026, 8, 'K1-R9'), { ...stored, revision: 5 });
       await dialog.getByRole('button', { name: 'Simpan observasi' }).click();
-      await dialog.getByRole('alert').filter({ hasText: /tidak ada penimpaan otomatis/ }).waitFor();
+      await dialog.getByRole('alert').filter({ hasText: 'Data telah berubah atau periode dikunci saat formulir ini terbuka. Isian Anda belum disimpan. Muat ulang untuk melihat data terbaru, lalu periksa dan isi kembali.' }).waitFor();
       assert.equal(writes.length, 1); assert.equal(await dialog.getByRole('button', { name: 'Simpan observasi' }).isDisabled(), true);
       page.once('dialog', dialog => dialog.accept()); await dialog.getByRole('button', { name: 'Muat ulang', exact: true }).click();
       await dialog.getByLabel('Ketersediaan dokumen').selectOption('true'); await save(page);
@@ -347,13 +349,13 @@ test('monthly observations through the real store and workspace, isolated API on
       await page.keyboard.press('Escape'); assert.equal(await dialog.isVisible(), true);
       assert.equal(await page.getByRole('combobox', { name: 'Bulan evaluasi', exact: true }).isDisabled(), true);
       assert.equal(await page.evaluate(async () => { try { await window.fixture.store.setCurrentYear(2025); return false; } catch { return true; } }), true);
-      release(); await dialog.getByRole('status').filter({ hasText: 'tersimpan di server' }).waitFor();
+      release(); await dialog.getByRole('status').filter({ hasText: 'Observasi bulanan berhasil disimpan.' }).waitFor();
       await dialog.getByRole('button', { name: 'Tutup', exact: true }).click();
       await page.getByRole('combobox', { name: 'Bulan evaluasi', exact: true }).selectOption('9');
       const next = await open(page); assert.equal(await next.getByLabel('Ketersediaan dokumen').inputValue(), '');
       assert.equal(writes.length, 1);
       await next.getByRole('button', { name: 'Tutup', exact: true }).click();
-      await page.getByRole('combobox', { name: 'Tahun anggaran', exact: true }).selectOption('2025');
+      await page.getByRole('combobox', { name: 'Tahun pelaporan', exact: true }).selectOption('2025');
       await page.waitForFunction(() => !window.fixture.store.getLoadState().loading);
       assert.equal(await page.evaluate(() => window.fixture.store.getMonthlyObservation('K1-R9', 8)), undefined);
     }));
@@ -391,7 +393,7 @@ test('monthly observations through the real store and workspace, isolated API on
         if (target === 'month') await page.getByRole('combobox', { name: 'Bulan evaluasi', exact: true }).evaluate(select => {
           select.value = '9'; select.dispatchEvent(new Event('change', { bubbles: true }));
         });
-        else await page.getByRole('button', { name: 'Dashboard PIC & Kepatuhan', exact: true }).evaluate(button => button.click());
+        else await page.getByRole('button', { name: 'Pemantauan PIC', exact: true }).evaluate(button => button.click());
         assert.equal(await dialog.getByLabel('Ketersediaan dokumen').inputValue(), 'false');
         assert.equal(await page.getByRole('combobox', { name: 'Bulan evaluasi', exact: true }).inputValue(), '8');
       }
@@ -422,7 +424,7 @@ test('monthly observations through the real store and workspace, isolated API on
       assert.equal(writes.filter(write => write.path === '/storage/uploads').length, uploadCount);
       assert.equal(writes.filter(write => write.path.endsWith('/finalize')).length, 1);
       await dialog.getByLabel('Ketersediaan dokumen').selectOption('true');
-      assert.equal(await dialog.getByRole('status').filter({ hasText: 'tersimpan di server' }).count(), 0);
+      assert.equal(await dialog.getByRole('status').filter({ hasText: 'Observasi bulanan berhasil disimpan.' }).count(), 0);
     }));
     await t.test('pending upload prevents close, duplicate submit and scope changes; session expiry never saves late evidence', () => fixture({}, async ({ page, writes, control }) => {
       const dialog = await open(page); await dialog.getByLabel('Ketersediaan dokumen').selectOption('false');

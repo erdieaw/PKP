@@ -795,7 +795,7 @@ test('authenticated private storage gateway frontend', async t => {
           let button;
           if (view === 'evidence') button = page.getByRole('button', { name: 'Unduh bukti dukung', exact: true });
           else {
-            await page.getByRole('button', { name: 'Unduh PDF Provisional', exact: true }).click();
+            await page.getByRole('button', { name: view === 'modal' ? 'Unduh PDF Sementara' : 'Unduh PDF Provisional', exact: true }).click();
             button = page.getByRole('button', { name: 'Unduh report.pdf', exact: true });
           }
           await button.waitFor();
@@ -827,14 +827,14 @@ test('authenticated private storage gateway frontend', async t => {
       });
       try {
         await page.evaluate(() => window.gateway.render('modal'));
-        await page.getByRole('button', { name: 'Unduh PDF Provisional', exact: true }).click();
+        await page.getByRole('button', { name: 'Unduh PDF Sementara', exact: true }).click();
         const button = page.getByRole('button', { name: 'Unduh report.pdf', exact: true });
         await button.click();
         await page.getByRole('alert').filter({ hasText: 'Download denied' }).waitFor();
         assert.equal(await button.isDisabled(), false);
         assert.equal(await page.evaluate(() => window.gateway.downloads.length), 0);
         ready = false;
-        await page.getByRole('button', { name: 'Unduh PDF Provisional', exact: true }).click();
+        await page.getByRole('button', { name: 'Unduh PDF Sementara', exact: true }).click();
         await page.getByRole('alert').filter({ hasText: 'Berkas unduhan belum tersedia.' }).waitFor();
         assert.equal(requests.filter(r => r.path.endsWith('/content')).length, 1);
       } finally { await page.close(); }
@@ -848,7 +848,7 @@ test('authenticated private storage gateway frontend', async t => {
       });
       try {
         await page.evaluate(() => window.gateway.render('modal'));
-        await page.getByRole('button', { name: 'Unduh PDF Provisional', exact: true }).click();
+        await page.getByRole('button', { name: 'Unduh PDF Sementara', exact: true }).click();
         const downloaded = page.waitForEvent('download');
         await page.getByRole('button', { name: 'Unduh report.pdf', exact: true }).click();
         assert.equal((await downloaded).suggestedFilename(), 'report.pdf');
@@ -866,7 +866,7 @@ test('authenticated private storage gateway frontend', async t => {
       });
       try {
         await page.evaluate(() => window.gateway.render('modal'));
-        await page.getByRole('button', { name: 'Unduh PDF Provisional', exact: true }).click();
+        await page.getByRole('button', { name: 'Unduh PDF Sementara', exact: true }).click();
         const started = page.waitForRequest('**/export/jobs/job/content');
         await page.getByRole('button', { name: 'Unduh report.pdf', exact: true }).click();
         await started;

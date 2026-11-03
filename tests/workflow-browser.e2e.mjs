@@ -29,7 +29,7 @@ async function api(path, token, method = 'GET', body) {
 
 async function ready(page) {
   await page.waitForFunction(centerId => {
-    const year = document.querySelector('select[aria-label="Tahun anggaran"]');
+    const year = document.querySelector('select[aria-label="Tahun pelaporan"]');
     const center = document.querySelector('select[aria-label="Puskesmas"]');
     return year?.value === '2026' && !year.disabled && center?.value === centerId;
   }, fixture.healthCenterId);
@@ -49,7 +49,7 @@ async function login(username, role) {
   });
   await page.goto(frontend);
   assert.equal(await page.getByRole('group', { name: 'Peran akun' }).count(), 0);
-  await page.getByLabel(/Username|ID Staf/).fill(username);
+  await page.getByLabel('Nama pengguna', { exact: true }).fill(username);
   await page.getByLabel('Kata sandi', { exact: true }).fill(password);
   const loggedIn = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/auth/login') && response.request().method() === 'POST');
   await page.locator('form button[type="submit"]').click();
@@ -65,7 +65,7 @@ async function login(username, role) {
 }
 
 async function sheet(page) {
-  await page.getByRole('button', { name: 'Nilai Kinerja Resmi (Sheet 7)', exact: true }).click();
+  await page.getByRole('button', { name: 'Rekap Kinerja (Sheet 7)', exact: true }).click();
   await page.getByRole('button', { name: 'Triwulan I', exact: true }).click();
 }
 
@@ -226,7 +226,7 @@ try {
   activePage = admin.page;
   await admin.page.setViewportSize({ width: 390, height: 844 });
   await admin.page.getByRole('button', { name: 'Buka navigasi', exact: true }).click();
-  await admin.page.getByRole('button', { name: 'Dashboard Kinerja PKP', exact: true }).click();
+  await admin.page.getByRole('button', { name: 'Ringkasan Kinerja PKP', exact: true }).click();
   await admin.page.getByRole('button', { name: 'Buka navigasi', exact: true }).waitFor();
   await admin.page.waitForFunction(() => document.documentElement.scrollWidth <= window.innerWidth);
   assert.ok(await admin.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'Mobile dashboard must not overflow horizontally.');

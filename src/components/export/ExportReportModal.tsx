@@ -30,9 +30,9 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({ isOpen, on
           <div className="flex items-center gap-2.5">
             <FileSpreadsheet className="w-5 h-5 text-emerald-600" />
             <div><h3 className="font-bold text-slate-800 text-sm">Ekspor Laporan Penilaian Kinerja Puskesmas (PKP)</h3>
-              <p className="text-[11px] text-slate-500">Excel Sheet 7 dan PDF dihasilkan oleh server. Verifikasi aplikasi bukan pengesahan kesesuaian aturan PKP 2026.</p></div>
+              <p className="text-[11px] text-slate-500">Unduh rekap dalam Excel (Sheet 7) atau PDF. Status terverifikasi di aplikasi bukan pengesahan aturan PKP 2026.</p></div>
           </div>
-          {summary?.classificationStatus === 'UNRESOLVED_CLASSIFICATION' && <p role="status" className="rounded-lg bg-amber-50 p-3 text-amber-900">Hasil DO 2026 masih provisional. Kategori belum ditetapkan; rekap hierarkis hanya pratinjau dan belum dapat disahkan sebagai laporan resmi.</p>}
+          {summary?.classificationStatus === 'UNRESOLVED_CLASSIFICATION' && <p role="status" className="rounded-lg bg-amber-50 p-3 text-amber-900">Hasil DO 2026 masih sementara. Kategori belum ditetapkan. Ringkasan nilai antartingkat hanya pratinjau, bukan laporan resmi.</p>}
           {summary?.reportingPolicy && !summary.reportingPolicy.canSubmit && <p role="status" className="rounded-lg bg-amber-50 p-3 text-amber-900">{summary.reportingPolicy.reason}</p>}
           <button aria-label="Tutup ekspor laporan" onClick={onClose} className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg"><X className="w-5 h-5" /></button>
         </div>
@@ -40,26 +40,26 @@ export const ExportReportModal: React.FC<ExportReportModalProps> = ({ isOpen, on
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-slate-50 rounded-xl border border-slate-200">
             <label className="font-semibold text-slate-600">Pilih Periode Laporan:
               <select aria-label="Periode laporan ekspor" value={reportPeriod} disabled={pending} onChange={e => setReportPeriod(e.target.value === 'ANNUAL' ? 'ANNUAL' : Number(e.target.value) as 1 | 2 | 3 | 4)} className="mt-1 w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 font-bold text-slate-800">
-                {[1, 2, 3, 4].map(q => <option key={q} value={q}>Triwulan {q} (YTD Januari - bulan {q * 3})</option>)}
+                {[1, 2, 3, 4].map(q => <option key={q} value={q}>Triwulan {q} (kumulatif Januari sampai bulan {q * 3})</option>)}
                 <option value="ANNUAL">Rekap Tahunan (Januari–Desember)</option>
               </select>
             </label>
             <div><p className="font-semibold text-slate-600 mb-1">Fasilitas Pelayanan Kesehatan:</p><div className="px-3 py-1.5 bg-slate-100 border border-slate-200 rounded-lg font-bold text-slate-700">{puskesmasName} (TA {year})</div></div>
           </div>
-          {year >= 2026 && <p className="text-slate-600">Periode laporan tidak mengubah lingkup asesmen sumber. Snapshot, satu bulan, satu triwulan, tahun ajaran atau kohort bukan otomatis capaian tahunan. Server menahan hasil yang lingkupnya tidak cocok; data tidak dijumlahkan atau dirata-rata antarbulan.</p>}
+          {year >= 2026 && <p className="text-slate-600">Memilih laporan tahunan tidak mengubah periode data sumber. Data satu tanggal, satu bulan, satu triwulan, tahun ajaran, atau kohort tidak otomatis menjadi capaian tahunan. Hasil dengan periode yang tidak sesuai tidak ditampilkan; data tidak dijumlahkan atau dirata-rata antarbulan.</p>}
           {summary ? <div className="border border-slate-300 rounded-xl p-5 bg-white space-y-4 shadow-xs">
             <div className="text-center space-y-1 pb-3 border-b border-slate-200"><h4 className="font-extrabold text-sm text-slate-900 uppercase">Rekapitulasi Hasil Penilaian Kinerja</h4><p className="font-bold text-slate-700">{summary.puskesmasName}</p><p>{summary.periodLabel} {year}</p></div>
             <table className="w-full text-left border border-slate-200"><thead className="bg-slate-100 text-slate-700 font-bold"><tr><th className="py-2 px-3">Klaster Pelayanan</th><th className="py-2 px-3 text-right">Nilai Klaster</th></tr></thead>
               <tbody className="divide-y divide-slate-100">{[1, 2, 3, 4, 5].map(id => <tr key={id}><td className="py-2 px-3">Klaster {id}</td><td className="py-2 px-3 text-right font-mono font-bold">{score(summary.klasterScores[id])}</td></tr>)}
                 <tr className="bg-emerald-50 font-bold"><td className="py-2 px-3">NILAI KINERJA ({summary.kategoriPKP ?? '-'})</td><td className="py-2 px-3 text-right">{score(summary.nilaiKinerjaPuskesmas)}</td></tr></tbody>
             </table>
-          </div> : <p role="status">Ringkasan server belum tersedia.</p>}
+          </div> : <p role="status">Ringkasan laporan belum tersedia.</p>}
           {error && <p role="alert" className="p-3 rounded-lg bg-rose-50 text-rose-800">{error}</p>}
-          {pending && <ProcessingIndicator label={file ? 'Mengunduh laporan dari server.' : 'Server sedang memproses ekspor.'} description="Menutup dialog menghentikan pemantauan pekerjaan ini." />}
+          {pending && <ProcessingIndicator label={file ? 'Mengunduh laporan...' : 'Menyiapkan laporan...'} description="Jika dialog ditutup, perkembangan proses tidak lagi ditampilkan." />}
           {file && <button disabled={pending} onClick={() => void download()} className="block p-3 bg-emerald-50 text-emerald-800 rounded-lg underline disabled:opacity-50">Unduh {file.name}</button>}
           {!canExport && <p>Unduhan laporan hanya tersedia bagi Admin Puskesmas dan Dinkes.</p>}
           <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
-            <button disabled={pending || !canExport || !summary} onClick={() => void create('pdf', reportPeriod)} className="px-3.5 py-2 bg-slate-100 text-slate-700 rounded-lg font-semibold flex items-center gap-1.5 disabled:opacity-50"><Printer className="w-4 h-4" />{summary?.reportingPolicy?.operatingMode === 'INTERNAL_PHASED' ? 'Unduh PDF Evaluasi Internal' : summary?.isOfficial ? 'Unduh PDF Terverifikasi (Histori)' : 'Unduh PDF Provisional'}</button>
+            <button disabled={pending || !canExport || !summary} onClick={() => void create('pdf', reportPeriod)} className="px-3.5 py-2 bg-slate-100 text-slate-700 rounded-lg font-semibold flex items-center gap-1.5 disabled:opacity-50"><Printer className="w-4 h-4" />{summary?.reportingPolicy?.operatingMode === 'INTERNAL_PHASED' ? 'Unduh PDF Evaluasi Internal' : summary?.isOfficial ? 'Unduh PDF Terverifikasi (Riwayat)' : 'Unduh PDF Sementara'}</button>
             <button disabled={pending || !canExport || !summary} onClick={() => void create('excel', reportPeriod)} className="px-4 py-2 bg-emerald-600 text-white rounded-lg font-bold flex items-center gap-2 shadow-sm disabled:opacity-50"><Download className="w-4 h-4" />Unduh Excel (Sheet 7)</button>
           </div>
         </div>

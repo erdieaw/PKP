@@ -50,7 +50,7 @@ export const PicAssignmentView: React.FC = () => {
     setPending(true); setError(null); setNotification(null);
     try {
       await pkpStore.assignPic(indicatorId, picId);
-      showNotification('PIC berhasil diperbarui untuk indikator terkait');
+      showNotification('Penanggung jawab indikator berhasil diperbarui.');
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Penugasan gagal. Silakan coba lagi.');
     } finally { setPending(false); }
@@ -61,7 +61,7 @@ export const PicAssignmentView: React.FC = () => {
     setPending(true); setError(null); setNotification(null);
     try {
       await pkpStore.bulkAssignPic(bulkSection, bulkPicId);
-      showNotification(`Indikator dengan kode bagian tepat ${bulkSection} berhasil ditugaskan.`);
+      showNotification(`Penanggung jawab untuk indikator pada kode bagian ${bulkSection} berhasil ditetapkan.`);
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Penugasan massal gagal. Silakan coba lagi.');
     } finally { setPending(false); }
@@ -84,13 +84,13 @@ export const PicAssignmentView: React.FC = () => {
         <div>
           <div className="flex items-center gap-2 text-emerald-600 font-bold text-xs uppercase tracking-wider mb-1">
             <UserCheck className="w-4 h-4" />
-            <span>Manajemen Penugasan Elemen Penilaian</span>
+            <span>Penanggung Jawab Indikator</span>
           </div>
           <h2 className="text-xl font-bold text-slate-800">
-            Setting / Assignment PIC (Person In Charge)
+            Penugasan Penanggung Jawab (PIC)
           </h2>
           <p className="text-xs text-slate-500">
-            Tentukan staf Puskesmas yang bertanggung jawab menginput realisasi bulanan untuk masing-masing elemen penilaian.
+            Pilih staf Puskesmas yang bertanggung jawab mengisi data bulanan setiap indikator.
           </p>
         </div>
 
@@ -109,13 +109,13 @@ export const PicAssignmentView: React.FC = () => {
             <Sparkles className="w-4 h-4" />
           </div>
           <div>
-            <h4 className="text-xs font-bold text-emerald-950">Fitur Penugasan Cepat (Bulk Assign per Sub-klaster)</h4>
-            <p className="text-[11px] text-emerald-700">Hanya indikator dengan kode bagian persis sama; tidak termasuk bagian turunan.</p>
+            <h4 className="text-xs font-bold text-emerald-950">Penugasan Sekaligus per Kode Bagian</h4>
+            <p className="text-[11px] text-emerald-700">Berlaku hanya untuk kode bagian yang dipilih, tidak termasuk bagian turunannya.</p>
           </div>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs text-slate-600 font-medium">Sub-klaster:</span>
+          <span className="text-xs text-slate-600 font-medium">Kode bagian:</span>
           <select
             disabled={disabled}
             value={bulkSection}
@@ -128,7 +128,7 @@ export const PicAssignmentView: React.FC = () => {
             ))}
           </select>
 
-          <span className="text-xs text-slate-600 font-medium">ke PIC:</span>
+          <span className="text-xs text-slate-600 font-medium">PIC:</span>
           <select
             disabled={disabled}
             value={bulkPicId}
@@ -180,7 +180,7 @@ export const PicAssignmentView: React.FC = () => {
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
-            placeholder="Cari indikator untuk di-assign..."
+            placeholder="Cari kode, indikator, atau kegiatan..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full pl-9 pr-4 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
@@ -191,7 +191,7 @@ export const PicAssignmentView: React.FC = () => {
       {/* Table: Setting PIC per Indikator */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="p-3 bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-700">
-          Daftar Penugasan ({filtered.length} Elemen Penilaian)
+          Daftar Penugasan ({filtered.length} Indikator)
         </div>
 
         <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
@@ -201,7 +201,7 @@ export const PicAssignmentView: React.FC = () => {
                 <th className="py-2.5 px-3 w-20">Kode</th>
                 <th className="py-2.5 px-3 min-w-[280px]">Indikator Kinerja & Kegiatan</th>
                 <th className="py-2.5 px-3 w-40">Sub-klaster</th>
-                <th className="py-2.5 px-3 w-72">Penanggung Jawab (PIC yang Ditunjuk)</th>
+                <th className="py-2.5 px-3 w-72">Penanggung Jawab (PIC)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">

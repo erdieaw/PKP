@@ -26,7 +26,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
     if (loading) return;
     setErrorMessage(null);
     if (!username.trim() || !password) {
-      setErrorMessage('Isi username dan kata sandi Anda.');
+      setErrorMessage('Isi nama pengguna dan kata sandi Anda.');
       return;
     }
     if (!challenge.ready) {
@@ -36,12 +36,12 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
     setLoading(true);
     try {
       const user = await pkpStore.authenticate(username.trim(), password, challenge.token || undefined);
-      if (!user) throw new ApiError(401, 'Username atau kata sandi salah.');
+      if (!user) throw new ApiError(401, 'Nama pengguna atau kata sandi salah.');
       onLoginSuccess(user);
     } catch (error) {
       const status = error instanceof ApiError ? error.status : undefined;
       setErrorMessage(status === 401 || status === 403
-        ? 'Username atau kata sandi salah. Periksa kembali dan coba lagi. Jika tetap tidak bisa masuk, hubungi administrator.'
+        ? 'Nama pengguna atau kata sandi salah. Periksa kembali dan coba lagi. Jika tetap tidak bisa masuk, hubungi Admin Puskesmas atau Dinkes.'
         : status === 422
           ? 'Verifikasi keamanan tidak valid atau kedaluwarsa. Silakan verifikasi kembali.'
         : status === 429
@@ -117,17 +117,17 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
             aria-pressed={motionPaused} title={motionPaused ? 'Putar animasi' : 'Jeda animasi'}
           >{motionPaused ? <Play size={12} aria-hidden="true" /> : <Pause size={12} aria-hidden="true" />}</button>
         </div>
-        <h1 id="login-heading" className="login-heading">Selamat datang.</h1>
-        <p className="login-intro">Masuk untuk melanjutkan pekerjaan Anda.</p>
+        <h1 id="login-heading" className="login-heading">Masuk ke SIPKP</h1>
+        <p className="login-intro">Gunakan akun yang diberikan oleh Admin Puskesmas atau Dinkes.</p>
 
         <form onSubmit={handleSubmit} className="mt-6 space-y-4" aria-busy={loading}>
           <div>
-            <label htmlFor="auth-username" className="mb-2 block text-sm font-medium">Username</label>
+            <label htmlFor="auth-username" className="mb-2 block text-sm font-medium">Nama pengguna</label>
             <input
               id="auth-username" name="username" type="text" autoComplete="username" autoCapitalize="none" spellCheck={false}
               value={username} onChange={event => setUsername(event.target.value)} required disabled={loading}
               aria-describedby={errorMessage ? 'login-error' : undefined}
-              placeholder="Masukkan username"
+              placeholder="Masukkan nama pengguna"
               className="login-input"
             />
           </div>

@@ -44,7 +44,7 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
     if (!canCreate || pending) return;
     setError(null); setToast(null);
     if (!name.trim() || !/^[A-Za-z0-9._-]{3,100}$/.test(username.trim()) || password.length < 12) {
-      setError('Isi nama, username 3-100 karakter (huruf, angka, titik, garis bawah atau tanda hubung), dan password minimal 12 karakter.');
+      setError('Isi nama, nama pengguna 3-100 karakter (huruf, angka, titik, garis bawah atau tanda hubung), dan kata sandi minimal 12 karakter.');
       return;
     }
     setPending(true);
@@ -56,7 +56,7 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
     setPassword('');
     setPhone('');
     setEmail('');
-    setToast(`Staf PIC ${name.trim()} berhasil didaftarkan untuk ${scopeName}!`);
+    setToast(`Staf PIC ${name.trim()} berhasil didaftarkan untuk ${scopeName}.`);
     setTimeout(() => setToast(null), 3000);
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Pendaftaran gagal. Periksa data dan coba lagi.');
@@ -79,13 +79,13 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
               <h3 className="font-bold text-sm text-white">
                 {isDinkesMode 
                   ? `Direktori Staf PIC - ${scopeName}`
-                  : `Kelola Staf PIC Internal - ${scopeName}`
+                  : `Kelola Staf PIC - ${scopeName}`
                 }
               </h3>
               <p className="text-[11px] text-slate-300">
                 {isDinkesMode 
-                   ? `Supervisi staf penanggung jawab ${pkpStore.getIndicators().length} indikator aktif`
-                  : 'Kewenangan mandiri Puskesmas untuk mendaftarkan dan menugaskan staf'
+                   ? `Tinjau staf penanggung jawab ${pkpStore.getIndicators().length} indikator`
+                  : 'Daftarkan dan kelola akun staf PIC Puskesmas'
                 }
               </p>
             </div>
@@ -114,17 +114,17 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
             <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-900 text-[11px] space-y-1">
               <p className="font-bold flex items-center gap-1.5">
                 <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                <span>Kewenangan Administrator Puskesmas vs PIC:</span>
+                <span>Pengelolaan akun administrator dan PIC:</span>
               </p>
               <p>
-                Dinas Kesehatan berwenang membuat <strong>Akun Administrator Puskesmas</strong> melalui menu <em>Pusat Data Master</em>. Setiap Puskesmas memiliki wewenang mandiri mendaftarkan staf PIC mereka di bawah ini.
+                Dinas Kesehatan membuat <strong>akun administrator Puskesmas</strong> melalui menu <em>Pengelolaan Data</em>. Administrator Puskesmas mendaftarkan staf PIC untuk Puskesmas masing-masing.
               </p>
             </div>
           ) : (
             <div className="p-3 bg-teal-50 border border-teal-200 rounded-xl text-teal-900 text-[11px] flex items-center gap-2">
               <Building2 className="w-4 h-4 text-teal-700 shrink-0" />
               <span>
-                Faskes Aktif: <strong>{scopeName}</strong>. Seluruh PIC yang didaftarkan di sini hanya akan bertanggung jawab pada data Puskesmas ini.
+                Puskesmas terpilih: <strong>{scopeName}</strong>. Staf PIC yang didaftarkan di sini bertanggung jawab atas data Puskesmas ini.
               </span>
             </div>
           )}
@@ -156,7 +156,7 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
                     </div>
                   </div>
                   <div className="text-right">
-                    {(canCreate || user.role === 'DINKES_ADMIN') && <button disabled={pending || pkpStore.isMutating()} onClick={() => setResetPic({ id: p.id, name: p.name })} className="block underline text-xs">Reset Password</button>}
+                    {(canCreate || user.role === 'DINKES_ADMIN') && <button disabled={pending || pkpStore.isMutating()} onClick={() => setResetPic({ id: p.id, name: p.name })} className="block underline text-xs">Atur ulang kata sandi</button>}
                     <span className="block text-xs">{p.status === 'ACTIVE' ? 'Aktif' : 'Nonaktif'}</span>
                     <span className="font-mono text-emerald-700 font-semibold text-[11px]">{p.phone}</span>
                     {p.nip && <p className="text-[9px] text-slate-400 font-mono">NIP: {p.nip}</p>}
@@ -172,7 +172,7 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
               <fieldset disabled={pending || pkpStore.getLoadState().loading} className="space-y-3">
               <div className="flex items-center gap-2 font-bold text-slate-800">
                 <UserPlus className="w-4 h-4 text-teal-600" />
-                <span>Tambah Staf PIC Internal Puskesmas</span>
+                <span>Tambah Staf PIC Puskesmas</span>
               </div>
               <div className="space-y-2.5">
                 <div>
@@ -212,9 +212,9 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
                   </div>
                 </div>
                 <div>
-                  <label className="text-[11px] font-semibold text-slate-600 block mb-1">Username (3-100 karakter):</label>
+                  <label className="text-[11px] font-semibold text-slate-600 block mb-1">Nama pengguna (3-100 karakter):</label>
                   <input
-                     aria-label="Username"
+                     aria-label="Nama pengguna"
                      type="text"
                     autoComplete="off"
                     pattern="[A-Za-z0-9._-]{3,100}"
@@ -224,13 +224,13 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
                     required
                   />
                 </div>
-                <label className="block text-[11px] font-semibold text-slate-600">Password (minimal 12 karakter)
+                <label className="block text-[11px] font-semibold text-slate-600">Kata sandi (minimal 12 karakter)
                   <input type="password" autoComplete="new-password" required minLength={12} maxLength={256} value={password} onChange={e => setPassword(e.target.value)} className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 </label>
                 <label className="block text-[11px] font-semibold text-slate-600">Email (opsional)
                   <input type="email" value={email} onChange={e => setEmail(e.target.value)} className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 </label>
-                <p className="text-slate-500">Akun disimpan dengan peran PIC. Jabatan/program tidak disimpan oleh sistem.</p>
+                <p className="text-slate-500">Staf didaftarkan dengan peran PIC. Jabatan atau program tidak dicatat pada akun.</p>
               </div>
               <div className="flex justify-end pt-1">
                 <button
