@@ -406,7 +406,7 @@ test('193 live source contracts in frontend and browser', async t => {
       }));
       await t.test(`${id}: report labels target-met nihil without fabricated measurement or score`, () => pageFixture(async page => {
         await mount(page, { index, view: 'panel', saved: { status: 'VERIFIED_NO_CASE_TARGET_MET', numerator: 0, denominator: 0, measurementValue: null, nilaiKinerja: null, dataComplete: false } });
-        assert.equal(await page.getByText(/Nihil terverifikasi menurut attestasi petugas: target terpenuhi/).count(), 1);
+        assert.equal(await page.getByText('Target terpenuhi berdasarkan pernyataan petugas bahwa tidak ada kasus, dengan referensi Dinsos dan pencocokan data kohort. Pernyataan ini belum diverifikasi pihak luar. Hasil tidak dinyatakan sebagai persentase 0/0 atau skor angka.', { exact: true }).count(), 1);
         assert.equal(await page.getByText(/Status hitung: VERIFIED_NO_CASE_TARGET_MET/).count(), 1);
         const results = await page.getByRole('region', { name: 'Hasil rekap indikator', exact: true }).locator('dl dd').allTextContents();
         assert.deepEqual(results, ['0', '0', '-', '-']);
@@ -533,7 +533,7 @@ test('193 live source contracts in frontend and browser', async t => {
     await t.test('source panel opens input-only components and labels snapshot as nonannual', () => pageFixture(async page => {
       const index = indexFor(row => row.descriptor.expectedValueKind === 'COMPONENT_OBSERVATIONS' && row.descriptor.period === 'AS_OF');
       await mount(page, { index, view: 'panel' });
-      assert.equal(await page.getByText(/Tidak berlaku sebagai capaian tahunan/).count(), 1);
+      assert.equal(await page.getByText(/Bukan capaian tahunan\. Data tidak dikonversi atau digabung antarbulan\./).count(), 1);
       assert.equal(await page.getByText(/API menyimpan placeholder kompatibilitas 0\/0/).count(), 1);
       await confirm(page); assert.equal(await save(page).isEnabled(), true);
     }));

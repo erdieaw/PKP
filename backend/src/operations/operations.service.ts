@@ -119,6 +119,7 @@ export class OperationsService {
         tx.monthlyRecord.count({ where: { year } }), tx.periodLock.count({ where: { year } }),
         tx.recommendation.count({ where: { year } }), tx.upload.count({ where: { year } }),
         tx.exportJob.count({ where: { year } }),
+        tx.monthlyObservation.count({ where: { year } }),
       ]);
       if (references.some(count => count > 0)) throw new ConflictException('Year period is referenced and cannot be deleted');
       await tx.yearPeriod.delete({ where: { year } });

@@ -53,13 +53,13 @@ test('self reset and cross-tenant reset are rejected before opening a transactio
 });
 
 test('year deletion checks non-FK uploads and export jobs after locking', async () => {
-  for (const referenced of ['upload', 'exportJob']) {
+  for (const referenced of ['upload', 'exportJob', 'monthlyObservation']) {
     const events: string[] = [];
     const tx: any = {
       $queryRaw: async () => { events.push('lock'); return [{ year: 2026, isLocked: false, cutoffDay: 10 }]; },
       yearPeriod: { delete: async () => assert.fail('Referenced year must not be deleted') },
     };
-    for (const model of ['annualTarget', 'picAssignment', 'monthlyRecord', 'periodLock', 'recommendation', 'upload', 'exportJob']) {
+    for (const model of ['annualTarget', 'picAssignment', 'monthlyRecord', 'monthlyObservation', 'periodLock', 'recommendation', 'upload', 'exportJob']) {
       tx[model] = { count: async () => { assert.equal(events[0], 'lock'); return model === referenced ? 1 : 0; } };
     }
     const db = { $transaction: async (callback: any) => callback(tx) } as unknown as DbService;

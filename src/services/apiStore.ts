@@ -1,6 +1,8 @@
 import { api, ApiError, type SessionTokens } from './apiClient';
 import { compareIndicators } from './indicatorOrder';
 import type { SavePeriodRecap } from '../types/do2026';
+import type { MonthlyObservation, MonthlyObservationInput } from '../types/monthlyObservation';
+import { getMonthlyInputBlockReason } from './inputPeriod';
 import type {
   AuthUser, UserRole, OfficialIndicator, PicUser, AdminPuskesmasUser, YearPeriod,
   HealthCenter, AuditLogEntry, IndicatorAnnualTarget, MonthlyRecord,
@@ -51,6 +53,8 @@ interface State {
   targets: Record<string, IndicatorAnnualTarget>;
   recommendations: DinkesRecommendation[];
   months: Record<number, Record<string, RecordView>>;
+  observations: Record<number, Record<string, MonthlyObservation>>;
+  observationLoads: Record<number, { status: 'loading' | 'loaded' | 'error'; error: string | null }>;
   periods: PeriodView[];
   sheets: Partial<Record<Quarter, Sheet7OfficialSummary & Wire>>;
   trend: AnnualTrendData | null;
@@ -72,7 +76,7 @@ function freeze<T>(value: T): T {
   }
   return value;
 }
-const emptyScope = () => ({ pics: [], admins: [], audit: [], assignments: {}, targets: {}, recommendations: [], months: {}, periods: [], sheets: {}, trend: null, indicatorTrends: [] });
+const emptyScope = () => ({ pics: [], admins: [], audit: [], assignments: {}, targets: {}, recommendations: [], months: {}, observations: {}, observationLoads: {}, periods: [], sheets: {}, trend: null, indicatorTrends: [] });
 const initial = (): State => ({ version: 0, pendingWrites: 0, user: null, year: new Date().getFullYear(), healthCenterId: null, load: { loading: false, error: null, scopeKey: '' }, indicators: [], sections: [], masterIndicators: [], masterSections: [], years: [], centers: [], ...emptyScope() });
 const missingRecord = freeze({ pencapaianRiil: null, capaianRiilPct: null, nilaiKinerja: null, isSubmitted: false, isMissing: true, evidenceId: null } as unknown as RecordView);
 const emptyArray = freeze([]);
@@ -92,6 +96,7 @@ class ApiStore {
   private writes: Promise<unknown> = Promise.resolve();
   private restoring: Promise<AuthUser | null> | null = null;
   private initializing: { userId: string; promise: Promise<void> } | null = null;
+  private observationRequests = new Map<number, number>();
 
   constructor() {
     if (typeof window !== 'undefined') window.addEventListener('sipkp-session-expired', () => this.clear());
@@ -549,6 +554,61 @@ class ApiStore {
     return result;
   }
   savePeriodRecap = (recap: SavePeriodRecap) => this.mutate('/records/period-recaps', 'PUT', recap, 'all');
+  getMonthlyObservation = (indicatorId: string, month: number, year = this.state.year) => year === this.state.year ? this.state.observations[month]?.[indicatorId] : undefined;
+  getMonthlyObservationsLoad = (month: number, year = this.state.year) => year === this.state.year ? this.state.observationLoads[month] : undefined;
+  private invalidateObservationRead(month: number) {
+    this.observationRequests.set(month, (this.observationRequests.get(month) ?? 0) + 1);
+    if (this.state.observationLoads[month]?.status === 'loading') {
+      const observationLoads = { ...this.state.observationLoads };
+      delete observationLoads[month];
+      this.commit({ observationLoads });
+    }
+  }
+  async fetchMonthlyObservations(year: number, month: number) {
+    if (year !== this.state.year) throw new Error('Lingkup tahun berubah. Buka kembali observasi.');
+    const scope = this.scope(year);
+    const epoch = this.generation;
+    const request = (this.observationRequests.get(month) ?? 0) + 1;
+    this.observationRequests.set(month, request);
+    this.commit({ observationLoads: { ...this.state.observationLoads, [month]: { status: 'loading', error: null } } });
+    try {
+      const result = await this.read('/records/monthly-observations', { ...scope, month }) as { items: MonthlyObservation[] };
+      if (epoch !== this.generation || request !== this.observationRequests.get(month)) throw new Error('Lingkup atau observasi berubah. Muat ulang sebelum menyimpan.');
+      this.commit({ observations: { ...this.state.observations, [month]: Object.fromEntries(result.items.map(row => [row.indicatorId, row])) },
+        observationLoads: { ...this.state.observationLoads, [month]: { status: 'loaded', error: null } } });
+      return result.items;
+    } catch (error) {
+      if (epoch === this.generation && request === this.observationRequests.get(month)) {
+        this.commit({ observationLoads: { ...this.state.observationLoads, [month]: { status: 'error', error: error instanceof Error ? error.message : 'Observasi gagal dimuat.' } } });
+      }
+      throw error;
+    }
+  }
+  saveMonthlyObservation = (year: number, month: number, record: MonthlyObservationInput) => {
+    const scope = this.scope(year);
+    const check = () => {
+      if (year !== this.state.year || scope.healthCenterId !== this.state.healthCenterId) throw new Error('Lingkup berubah. Buka kembali observasi.');
+      const reason = getMonthlyInputBlockReason(year, month, record.indicatorId);
+      if (reason) throw new Error(reason);
+    };
+    check();
+    return this.trackWrite(epoch => {
+      const work = this.writes.then(async () => {
+        if (epoch !== this.generation) throw new Error('Sesi berubah. Buka kembali observasi.');
+        check();
+        this.invalidateObservationRead(month);
+        const result = await api.request<{ items: MonthlyObservation[] }>('/records/monthly-observations', {
+          method: 'PUT', body: { year, month, records: [record] }, signal: this.controller.signal,
+        });
+        if (epoch !== this.generation) throw new Error('Sesi berubah selama penyimpanan.');
+        this.invalidateObservationRead(month);
+        this.commit({ observations: { ...this.state.observations, [month]: { ...this.state.observations[month], ...Object.fromEntries(result.items.map(row => [row.indicatorId, row])) } } });
+        return result.items;
+      });
+      this.writes = work.catch(() => {});
+      return work;
+    });
+  };
   saveRecord = (indicatorId: string, month: number, data: { pencapaianRiil: number; notes?: string; evidenceId?: string | null; scoringVersion?: 'ILP_2026_V1' | 'DO_2026_V2'; inputBasis?: 'PERIOD_ACTUAL' | 'YTD_ACTUAL'; totalSasaran?: number }, year = this.state.year) => this.mutate('/records/monthly', 'PUT', { year, month, records: [{ indicatorId, ...data }] }, 'month');
   updateMonthlyInput = (id: string, month: number, realisasi: number, notes?: string, evidenceId?: string, year = this.state.year) => this.saveRecord(id, month, { pencapaianRiil: realisasi, notes, evidenceId }, year);
   updateAnnualTarget = (indicatorId: string, targetPct: number, totalSasaran: number, year = this.state.year) => this.saveAnnualTargetsBulk([{ indicatorId, targetPct, totalSasaran }], year);

@@ -62,7 +62,7 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
 
   return (
     <div className="space-y-6">
-      <p className="text-xs text-slate-600">Kategori/distribusi 91/81 hanya untuk kompatibilitas V1. Observasi DO 2026 tidak dimasukkan ke kategori tersebut; pengukuran dan status provisional dapat dilihat pada Input Capaian.</p>
+      <p className="text-xs text-slate-600">Kategori di halaman ini memakai aturan lama (V1), dengan batas nilai 91 dan 81, bukan kategori resmi PKP 2026. Hasil berdasarkan Definisi Operasional (DO) 2026 tidak masuk kategori ini. Lihat hasil sementara di Input Capaian Bulanan.</p>
       {/* Top Banner: Total Performance Score */}
       <div className="bg-gradient-to-br from-obsidian-950 via-obsidian-900 to-emerald-950/90 rounded-3xl p-6 sm:p-7 text-white shadow-xl border border-obsidian-800/80 relative overflow-hidden">
         {/* Subtle Ambient Radial Glow */}
@@ -73,13 +73,13 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
           <div className="space-y-2">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 text-xs font-semibold">
               <Award className="w-3.5 h-3.5" />
-              <span>SIPKP PULSE • Rekapitulasi Kinerja Akhir Faskes</span>
+              <span>Ringkasan bulanan</span>
             </div>
             <h2 className="text-2xl sm:text-3xl font-black tracking-tight text-white">
-              Capaian Penilaian Kinerja Puskesmas
+              Ringkasan Kinerja PKP
             </h2>
             <p className="text-slate-300 text-xs max-w-2xl leading-relaxed">
-              Ringkasan bulanan dari analitik server untuk tahun {pkpStore.getCurrentYear()}. Nilai yang belum tersedia ditampilkan sebagai tanda - dan tidak masuk distribusi kinerja.
+              Kinerja bulan {selectedMonth}, tahun {pkpStore.getCurrentYear()}. Tanda - berarti nilai belum tersedia, bukan nol. Nilai tersebut tidak masuk distribusi kinerja.
             </p>
           </div>
 
@@ -97,7 +97,7 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
             </div>
             <div className="h-12 w-px bg-obsidian-700" />
             <div>
-              <p className="text-[11px] text-slate-400 font-medium">Progress Input</p>
+              <p className="text-[11px] text-slate-400 font-medium">Isian Angka</p>
               <div className="text-2xl sm:text-3xl font-bold font-mono text-white">
                 {submissionRate}
               </div>
@@ -107,12 +107,12 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
             </div>
             <div className="h-12 w-px bg-obsidian-700 hidden sm:block" />
             <div className="hidden sm:block">
-              <p className="text-[11px] text-slate-400 font-medium">Bridge Provinsi</p>
+              <p className="text-[11px] text-slate-400 font-medium">Integrasi Provinsi</p>
               <div className="text-2xl sm:text-3xl font-bold font-mono text-cyan-300">
                 -
               </div>
               <p className="text-[10px] text-slate-400 font-mono">
-                Integrasi belum tersedia
+                Status tidak ditampilkan di sini
               </p>
             </div>
           </div>
@@ -125,7 +125,7 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
           <div className="space-y-1">
             <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Kinerja Baik (≥ 91%)</span>
             <div className="text-2xl font-bold font-mono text-emerald-600">{greenCount}</div>
-            <span className="text-[11px] text-slate-400">Elemen Penilaian Tercapai</span>
+            <span className="text-[11px] text-slate-400">Indikator menurut kategori V1</span>
           </div>
           <div className="w-12 h-12 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-600">
             <CheckCircle2 className="w-6 h-6" />
@@ -134,9 +134,9 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
 
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
           <div className="space-y-1">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Kinerja Cukup (81-90%)</span>
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Kinerja Cukup (81% sampai &lt;91%)</span>
             <div className="text-2xl font-bold font-mono text-amber-600">{yellowCount}</div>
-            <span className="text-[11px] text-slate-400">Dalam Pengawasan Rutin</span>
+            <span className="text-[11px] text-slate-400">Indikator menurut kategori V1</span>
           </div>
           <div className="w-12 h-12 rounded-xl bg-amber-50 border border-amber-100 flex items-center justify-center text-amber-600">
             <Clock className="w-6 h-6" />
@@ -147,7 +147,7 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
           <div className="space-y-1">
             <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Kinerja Kurang (&lt; 81%)</span>
             <div className="text-2xl font-bold font-mono text-rose-600">{redCount}</div>
-            <span className="text-[11px] text-slate-400">Perlu Intervensi / RTL</span>
+            <span className="text-[11px] text-slate-400">Indikator menurut kategori V1</span>
           </div>
           <div className="w-12 h-12 rounded-xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600">
             <AlertTriangle className="w-6 h-6" />
@@ -160,13 +160,13 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
         <div className="p-5 border-b border-slate-100 flex items-center justify-between">
           <div>
             <h3 className="font-bold text-slate-800 text-sm">Capaian per Klaster Pelayanan (ILP)</h3>
-            <p className="text-xs text-slate-500">Evaluasi internal bulan {selectedMonth}; kategori lama untuk kompatibilitas, bukan pengesahan aturan.</p>
+            <p className="text-xs text-slate-500">Ringkasan untuk evaluasi internal bulan {selectedMonth}, bukan penilaian resmi.</p>
           </div>
           <button 
             onClick={onNavigateToPicDashboard}
             className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-600 hover:text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg transition-colors"
           >
-            <span>Lihat Dasbor PIC</span>
+            <span>Lihat Pemantauan PIC</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -187,7 +187,7 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
                     {k.name}
                   </h4>
                   <span className="text-[11px] text-slate-500 font-mono">
-                    {k.count} Elemen Penilaian
+                    {k.count} indikator
                   </span>
                 </div>
               </div>

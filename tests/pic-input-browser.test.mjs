@@ -53,6 +53,9 @@ export const pkpStore = {
   getPicForIndicator: id => pkpStore.getPics().find(pic => pic.id === pkpStore.getAssignments()[id]),
   getAnnualTargets: () => Object.fromEntries(indicators.map(indicator => [indicator.id, { targetSasaran: 12000 }])),
   getMonthlyRecord: id => records[id],
+  getMonthlyObservation: () => undefined,
+  getMonthlyObservationsLoad: () => ({ status: 'loaded', error: null }),
+  fetchMonthlyObservations: async () => { requests.push('/records/monthly-observations'); return []; },
   updateMonthlyInput: (...args) => { writes.push(args); throw new Error('Monthly write not expected'); },
   saveRecord: (...args) => { writes.push(args); throw new Error('Monthly write not expected'); },
   savePeriodRecap: async recap => {
@@ -232,6 +235,7 @@ test('PIC dashboard period and input-basis presentation with an isolated store',
         await page.getByRole('region', { name: 'Hasil rekap indikator' }).waitFor();
         assert.equal(await page.getByLabel('Akhir periode rekap').inputValue(), '3');
         assert.deepEqual(await page.evaluate(() => window.picFixture.requests), [
+          '/records/monthly-observations',
           '/analytics/period-recap?year=2026&endMonth=3&healthCenterId=fixture-center',
         ]);
         await page.getByText('Isi atau perbarui rekap terpisah', { exact: true }).click();
@@ -291,7 +295,7 @@ test('PIC dashboard period and input-basis presentation with an isolated store',
             assert.equal(await page.getByRole('region', { name: 'Hasil rekap indikator' }).count(), 0);
             assert.equal(await selector.isDisabled(), true);
             assert.deepEqual(await selector.locator('option').allTextContents(), ['Tidak ada indikator yang cocok']);
-            await page.getByRole('button', { name: 'Muat ulang rekap dari server', exact: true }).click();
+            await page.getByRole('button', { name: 'Muat ulang rekap', exact: true }).click();
             await page.getByRole('status').filter({ hasText: 'Tidak ada indikator rekap yang ditugaskan kepada Anda' }).waitFor();
             assert.equal(await page.getByRole('region', { name: 'Hasil rekap indikator' }).count(), 0);
           }
@@ -326,7 +330,7 @@ test('PIC dashboard period and input-basis presentation with an isolated store',
           assert.equal(await month.inputValue(), '3');
           assert.equal(await filter.inputValue(), '');
           assert.equal(await selector.inputValue(), 'actual');
-          assert.equal(await page.evaluate(() => window.picFixture.requests.length), 1);
+          assert.equal(await page.evaluate(() => window.picFixture.requests.length), 2);
 
           await discardDialog(page, true, action);
           if (navigation === 'editor close' || navigation === 'panel close') {
@@ -430,7 +434,7 @@ test('PIC dashboard period and input-basis presentation with an isolated store',
           year: 2026, endMonth: 3, indicatorId: 'actual', numerator: 321, denominator: 100,
           notes: 'Register Januari-Maret, sampel sama tanpa duplikasi.', confirmed: true, expectedRevision: 0,
         }]]);
-        assert.equal(await page.evaluate(() => window.picFixture.requests.length), 2);
+        assert.equal(await page.evaluate(() => window.picFixture.requests.length), 3);
         await page.getByText('Isi atau perbarui rekap terpisah', { exact: true }).click();
         assert.equal(await page.getByRole('spinbutton', { name: 'Total item obat', exact: true }).inputValue(), '321');
         assert.equal(await page.getByRole('checkbox').isChecked(), false);

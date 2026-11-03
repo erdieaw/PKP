@@ -11,25 +11,25 @@ export function ResetPasswordDialog({ userId, name, onClose, onSuccess }: { user
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (pending || pkpStore.isMutating()) return;
-    if (password !== confirmation || password.length < 12 || !reason.trim()) { setError('Password minimal 12 karakter, konfirmasi harus sama, dan alasan wajib diisi.'); return; }
+    if (password !== confirmation || password.length < 12 || !reason.trim()) { setError('Kata sandi minimal 12 karakter. Konfirmasi harus sama dengan kata sandi baru. Isi alasan pengaturan ulang kata sandi.'); return; }
     setPending(true); setError('');
     try {
-      const result = await pkpStore.resetUserPassword(userId, password, reason);
+      await pkpStore.resetUserPassword(userId, password, reason);
       setPassword(''); setConfirmation(''); setReason('');
-      onSuccess(`Password ${name} berhasil direset. Sesi dicabut: ${result.sessionsRevoked ?? 'lihat audit server'}.`);
+      onSuccess(`Kata sandi akun ${name} berhasil diatur ulang. Pengguna perlu masuk kembali pada semua perangkat.`);
       onClose();
-    } catch (e) { setError(e instanceof Error ? e.message : 'Reset password gagal.'); }
+    } catch (e) { setError(e instanceof Error ? e.message : 'Kata sandi tidak dapat diatur ulang. Silakan coba lagi.'); }
     finally { setPending(false); }
   };
-  return <div className="fixed inset-0 z-[60] bg-slate-900/50 flex items-center justify-center p-4"><form role="dialog" aria-modal="true" aria-label={`Reset password ${name}`} onSubmit={submit} className="bg-white rounded-xl p-5 space-y-4 w-full max-w-md">
-    <h3 className="font-bold">Reset Password: {name}</h3>
-    <p className="text-sm">Seluruh sesi akun ini akan dicabut. Password tidak disimpan di browser atau ditampilkan dalam hasil.</p>
+  return <div className="fixed inset-0 z-[60] bg-slate-900/50 flex items-center justify-center p-4"><form role="dialog" aria-modal="true" aria-label={`Atur ulang kata sandi ${name}`} onSubmit={submit} className="bg-white rounded-xl p-5 space-y-4 w-full max-w-md">
+    <h3 className="font-bold">Atur ulang kata sandi {name}</h3>
+    <p className="text-sm">Setelah kata sandi diatur ulang, pengguna perlu masuk kembali pada semua perangkat.</p>
     {error && <p role="alert" className="text-rose-700">{error}</p>}
     <fieldset disabled={pending} className="space-y-3">
-      <label className="block">Password baru<input className="block w-full border rounded p-2" type="password" autoComplete="new-password" required minLength={12} maxLength={256} value={password} onChange={e => setPassword(e.target.value)} /></label>
-      <label className="block">Konfirmasi password baru<input className="block w-full border rounded p-2" type="password" autoComplete="new-password" required minLength={12} maxLength={256} value={confirmation} onChange={e => setConfirmation(e.target.value)} /></label>
-      <label className="block">Alasan reset password<textarea className="block w-full border rounded p-2" required maxLength={1000} value={reason} onChange={e => setReason(e.target.value)} /></label>
-      <div className="flex justify-end gap-3"><button type="button" onClick={close}>Batal</button><button className="bg-emerald-600 text-white rounded px-3 py-2" type="submit">{pending ? 'Mereset...' : 'Reset Password dan Cabut Sesi'}</button></div>
+      <label className="block">Kata sandi baru<input className="block w-full border rounded p-2" type="password" autoComplete="new-password" required minLength={12} maxLength={256} value={password} onChange={e => setPassword(e.target.value)} /></label>
+      <label className="block">Konfirmasi kata sandi baru<input className="block w-full border rounded p-2" type="password" autoComplete="new-password" required minLength={12} maxLength={256} value={confirmation} onChange={e => setConfirmation(e.target.value)} /></label>
+      <label className="block">Alasan pengaturan ulang kata sandi<textarea className="block w-full border rounded p-2" required maxLength={1000} value={reason} onChange={e => setReason(e.target.value)} /></label>
+      <div className="flex justify-end gap-3"><button type="button" onClick={close}>Batal</button><button className="bg-emerald-600 text-white rounded px-3 py-2" type="submit">{pending ? 'Menyimpan...' : 'Atur ulang kata sandi'}</button></div>
     </fieldset>
   </form></div>;
 }

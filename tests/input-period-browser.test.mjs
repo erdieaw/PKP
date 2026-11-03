@@ -42,14 +42,7 @@ root.render(React.createElement(FixtureLayout));
 window.periodFixture = { store: pkpStore };
 `;
 
-const dashboardSource = `
-import React from 'react';
-export function ExecutiveDashboard() {
-  return React.createElement('section', { 'aria-label': 'Dashboard fixture' }, 'Dashboard fixture');
-}
-`;
 const stubs = new Map([
-  ['ExecutiveDashboard', dashboardSource],
   ...['TargetSettingView', 'PicAssignmentModal', 'RecommendationView', 'DinkesSupervisionView',
     'YearPeriodModal', 'StaffManagementModal', 'ExportReportModal', 'MasterDataHub',
     'ChangePasswordModal', 'OfficialPerformanceSheet7', 'AnnualTrendDashboard'].map(name =>
@@ -130,7 +123,10 @@ test('input period through real AppLayout, Header, grid and drawer (isolated API
           data = { month: Number(query.get('month')), items: indicators.map(ind =>
             record(ind.id, (Number(query.get('month')) === 8 ? 808 : 17) + scopeOffset)) };
         }
-         else if (path === '/analytics/annual-trend') data = { subKlasters: [{ code: '5.1',
+         else if (path === '/records/monthly-observations') data = { items: [] };
+         else if (path === '/analytics/annual-trend') data = { monthlyOverallScores: Array(12).fill(50),
+           monthlyCategories: Array(12).fill('Kinerja Kurang'),
+           klasters: [{ klasterId: 5, monthlyScores: Array(12).fill(50) }], subKlasters: [{ code: '5.1',
            monthlyScores: Array(12).fill(50), indicatorCount: indicators.length }] };
          else if (path === '/analytics/period-recap') data = { items: [{
            indicatorId: 'do', indicator: indicators[1], numerator: 250, denominator: 100,
@@ -162,7 +158,7 @@ test('input period through real AppLayout, Header, grid and drawer (isolated API
       } catch (error) { await context.close(); throw error; }
     }
     const monthSelect = page => page.getByRole('combobox', { name: 'Bulan evaluasi', exact: true });
-    const yearSelect = page => page.getByRole('combobox', { name: 'Tahun anggaran', exact: true });
+    const yearSelect = page => page.getByRole('combobox', { name: 'Tahun pelaporan', exact: true });
     const centerSelect = page => page.getByRole('combobox', { name: 'Puskesmas', exact: true });
     const drawer = page => page.getByRole('dialog', { name: 'Rincian indikator', exact: true });
     const details = (page, code = '5.1.1') => page.getByRole('button', { name: `Rincian indikator ${code}`, exact: true });
@@ -198,12 +194,110 @@ test('input period through real AppLayout, Header, grid and drawer (isolated API
       const panel = drawer(page);
       await panel.getByText('Kumulatif Januari sampai Maret 2026 (TW 1)', { exact: true }).waitFor();
       await panel.getByRole('status').filter({ hasText: /rincian kumulatif triwulan/ }).waitFor();
+      assert.equal(await page.getByText('Periksa periode pada setiap hasil kumulatif; hasil tersebut bukan data satu bulan saja.', { exact: false }).isVisible(), true);
       assert.equal(await panel.locator('input, textarea').count(), 0);
       assert.equal(await panel.getByRole('button', { name: /Simpan|Edit capaian/ }).count(), 0);
       // The annual trend may still display August; only the inspection/input context is TW1.
       assert.equal(await panel.getByText('Agustus 2026', { exact: true }).count(), 0);
       assert.equal(await monthSelect(page).inputValue(), '8', 'TW inspection must not mutate the global month');
     }
+
+    await t.test('summary and operating guidance distinguish legacy categories from official assessment', async () => {
+      const f = await fixture();
+      try {
+        const { page } = f;
+        assert.equal(await page.getByRole('heading', { name: 'Ringkasan Kinerja PKP', exact: true }).isVisible(), true);
+        assert.equal(await page.getByText('Kategori di halaman ini memakai aturan lama (V1), dengan batas nilai 91 dan 81, bukan kategori resmi PKP 2026. Hasil berdasarkan Definisi Operasional (DO) 2026 tidak masuk kategori ini. Lihat hasil sementara di Input Capaian Bulanan.', { exact: true }).isVisible(), true);
+        const notice = page.getByRole('region', { name: 'Mode operasional', exact: true });
+        assert.equal(await notice.getByRole('heading', { name: 'Untuk evaluasi internal', exact: true }).isVisible(), true);
+        await notice.getByText('Panduan input dan batas penilaian', { exact: true }).click();
+        assert.equal(await notice.getByText('Angka lengkap belum berarti penilaian tahunan lengkap. Cara hitung berbeda antarindikator; sebagian aturan sumber masih perlu klarifikasi dan belum dapat dihitung.', { exact: true }).isVisible(), true);
+        assert.equal(await notice.getByText('Kategori lama tetap ditampilkan untuk membaca riwayat. Kategori resmi belum ditetapkan; pengajuan dan verifikasi baru untuk 2026 dan setelahnya belum dibuka.', { exact: true }).isVisible(), true);
+      } finally { await f.close(); }
+    });
+
+    for (const width of [1440, 390]) {
+      await t.test(`revised guidance and navigation remain readable at ${width}px`, async () => {
+        const f = await fixture();
+        try {
+          const { page } = f;
+          await page.setViewportSize({ width, height: 900 });
+          await ready(page);
+          const notice = page.getByRole('region', { name: 'Mode operasional', exact: true });
+          await notice.getByText('Panduan input dan batas penilaian', { exact: true }).click();
+          assert.equal(await page.getByRole('heading', { name: 'Ringkasan Kinerja PKP', exact: true }).isVisible(), true);
+          const bounds = await notice.boundingBox();
+          assert.ok(bounds && bounds.x >= 0 && bounds.x + bounds.width <= width, 'Guidance stays within the viewport');
+          assert.equal(await page.locator('header').evaluate(el => el.scrollWidth <= el.clientWidth), true, 'Header does not overflow');
+          assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'Page does not overflow');
+          if (width < 768) await page.getByRole('button', { name: 'Buka navigasi', exact: true }).click();
+          for (const name of ['Tren Kinerja Bulanan', 'Pemantauan PIC', 'Penugasan PIC', 'Pengelolaan Data']) {
+            const button = page.getByRole('button', { name, exact: true });
+            assert.equal(await button.isVisible(), true);
+            assert.equal(await button.evaluate(el => el.scrollWidth <= el.clientWidth), true, `${name} fits its button`);
+          }
+          assert.equal(await page.getByText('TLS 1.3 Terenkripsi', { exact: true }).count(), 0);
+        } finally { await f.close(); }
+      });
+    }
+
+    await t.test('desktop hamburger hides and reopens the sidebar without discarding input or changing scope', async () => {
+      const f = await fixture();
+      try {
+        const { page } = f;
+        await grid(page);
+        await details(page).click();
+        const value = drawer(page).getByRole('spinbutton', { name: 'Realisasi fisik', exact: true });
+        await value.fill('909');
+        const sidebar = page.locator('#app-sidebar');
+        const main = page.locator('main');
+        const before = await main.boundingBox();
+        const requestCount = f.requests.length;
+        const toggle = page.locator('header').getByRole('button', { name: 'Sembunyikan navigasi', exact: true });
+        await toggle.focus();
+        await toggle.press('Enter');
+        assert.equal(await sidebar.isVisible(), false);
+        assert.equal(await value.inputValue(), '909');
+        assert.ok((await main.boundingBox()).width > before.width, 'Content uses the freed sidebar space');
+        const open = page.locator('header').getByRole('button', { name: 'Buka navigasi', exact: true });
+        assert.equal(await open.getAttribute('aria-expanded'), 'false');
+        assert.equal(await open.getAttribute('aria-controls'), 'app-sidebar');
+        await open.press('Space');
+        assert.equal(await sidebar.isVisible(), true);
+        assert.equal(await page.locator('#desktop-navigation-toggle').getAttribute('aria-expanded'), 'true');
+        assert.equal(await value.inputValue(), '909');
+        assert.equal(f.requests.length, requestCount, 'Toggling never saves or reloads data');
+      } finally { await f.close(); }
+    });
+
+    await t.test('sidebar hamburger preserves desktop preference across scope changes and mobile navigation', async () => {
+      const f = await fixture();
+      try {
+        const { page } = f;
+        const sidebar = page.locator('#app-sidebar');
+        await sidebar.getByRole('button', { name: 'Sembunyikan navigasi', exact: true }).click();
+        assert.equal(await sidebar.isVisible(), false);
+        assert.equal(await page.locator('#desktop-navigation-toggle').evaluate(el => el === document.activeElement), true, 'Focus returns to the visible toggle');
+        await yearSelect(page).selectOption('2025');
+        await ready(page);
+        assert.equal(await sidebar.isVisible(), false, 'Scope remount keeps the desktop preference');
+        await page.setViewportSize({ width: 390, height: 900 });
+        const open = page.locator('header').getByRole('button', { name: 'Buka navigasi', exact: true });
+        await open.click();
+        assert.equal(await sidebar.isVisible(), true, 'Mobile can open a desktop-collapsed sidebar');
+        assert.equal(await open.getAttribute('aria-expanded'), 'true');
+        await sidebar.getByRole('button', { name: 'Tutup navigasi', exact: true }).click();
+        assert.equal(await sidebar.isVisible(), false);
+        assert.equal(await open.getAttribute('aria-expanded'), 'false');
+        await open.click();
+        await sidebar.getByRole('button', { name: 'Input Capaian Bulanan', exact: true }).click();
+        assert.equal(await sidebar.isVisible(), false, 'Selecting a mobile menu item closes the panel');
+        await page.setViewportSize({ width: 1440, height: 900 });
+        assert.equal(await sidebar.isVisible(), false, 'Mobile navigation does not reset desktop preference');
+        await page.locator('header').getByRole('button', { name: 'Buka navigasi', exact: true }).click();
+        assert.equal(await sidebar.isVisible(), true);
+      } finally { await f.close(); }
+    });
 
     await t.test('grid filtering keeps an unrelated recap draft without a discard prompt', async () => {
       const f = await fixture();
@@ -294,7 +388,7 @@ test('input period through real AppLayout, Header, grid and drawer (isolated API
           const before = f.requests.length;
           const action = () => destination === 'month' ? monthSelect(page).selectOption('3')
             : destination === 'year' ? yearSelect(page).selectOption('2025')
-              : page.getByRole('button', { name: 'Dashboard Kinerja PKP', exact: true }).click();
+              : page.getByRole('button', { name: 'Ringkasan Kinerja PKP', exact: true }).click();
           await confirm(page, false, action);
           assert.equal(await input.inputValue(), '919', destination);
           assert.equal(await monthSelect(page).inputValue(), '8');
@@ -308,7 +402,7 @@ test('input period through real AppLayout, Header, grid and drawer (isolated API
           } else if (destination === 'year') {
             await ready(page);
             await page.getByRole('status').filter({ hasText: 'Melati Fixture / Agustus 2025' }).waitFor();
-          } else await page.getByRole('region', { name: 'Dashboard fixture', exact: true }).waitFor();
+          } else await page.getByRole('heading', { name: 'Ringkasan Kinerja PKP', exact: true }).waitFor();
           if (destination === 'tab') await grid(page);
           if (destination === 'month') await monthSelect(page).selectOption('8');
           if (destination === 'year') { await yearSelect(page).selectOption('2026'); await ready(page); }
@@ -373,6 +467,7 @@ test('input period through real AppLayout, Header, grid and drawer (isolated API
         assert.equal(await centerSelect(page).inputValue(), 'center-b');
         assert.equal(await monthSelect(page).inputValue(), '8');
         await details(page).click();
+        await page.waitForFunction(() => document.querySelector('input[aria-label="Realisasi fisik"]')?.value === '1008');
         assert.equal(await draft.inputValue(), '1008', 'New tenant data must replace the old tenant draft and record');
         await drawer(page).getByText('Puskesmas: Kenanga Fixture', { exact: true }).waitFor();
       } finally { await f.close(); }

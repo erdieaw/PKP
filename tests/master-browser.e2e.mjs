@@ -58,7 +58,7 @@ async function api(path, token, method = 'GET', body, status = 200) {
 
 async function ready(page, centerId = fixture.healthCenterId) {
   await page.waitForFunction(id => {
-    const year = document.querySelector('select[aria-label="Tahun anggaran"]');
+    const year = document.querySelector('select[aria-label="Tahun pelaporan"]');
     const center = document.querySelector('select[aria-label="Puskesmas"]');
     return year?.value === '2026' && !year.disabled && center?.value === id;
   }, centerId);
@@ -90,7 +90,7 @@ async function login(username, role) {
   });
   await page.goto(frontend);
   await expect(page.getByRole('group', { name: 'Peran akun' })).toHaveCount(0);
-  await page.getByLabel(/Username|ID Staf/).fill(username);
+  await page.getByLabel('Nama pengguna', { exact: true }).fill(username);
   await page.getByLabel('Kata sandi', { exact: true }).fill(password);
   const responsePromise = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/auth/login') && response.request().method() === 'POST');
   await page.locator('form button[type="submit"]').click();
@@ -102,8 +102,8 @@ async function login(username, role) {
   await page.getByLabel('Puskesmas', { exact: true }).waitFor();
   if (role === 'DINKES_ADMIN') await page.getByLabel('Puskesmas', { exact: true }).selectOption(fixture.healthCenterId);
   await ready(page);
-  await page.getByRole('button', { name: 'Pusat Data Master (CRUD)', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Kelola Master Data', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Pengelolaan Data', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Pengelolaan Data', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Tambah Indikator', exact: true })).toBeEnabled();
   return { page, context, token: session.accessToken };
 }
@@ -162,7 +162,7 @@ try {
   const page = admin.page;
   try {
   await budget();
-  await page.getByRole('button', { name: /^Master Klaster & Sub/ }).click();
+  await page.getByRole('button', { name: /^Klaster dan Bagian \(/ }).click();
   await page.getByRole('button', { name: 'Tambah Bagian', exact: true }).click();
   await page.getByLabel('Kode bagian', { exact: true }).fill(sectionCode);
   await page.getByLabel(/^Klaster/).selectOption('1');
@@ -179,7 +179,7 @@ try {
 
   stage = 'ADMIN UI full indicator creation and monthly visibility';
   await budget();
-  await page.getByRole('button', { name: /^Master Indikator/ }).click();
+  await page.getByRole('button', { name: /^Indikator \(/ }).click();
   await page.getByLabel('Cari katalog', { exact: true }).fill('');
   await page.getByRole('button', { name: 'Tambah Indikator', exact: true }).click();
   const fields = {
@@ -203,7 +203,7 @@ try {
   await expect(page.getByRole('button', { name: `Rincian indikator ${sectionCode}.1`, exact: true })).toBeVisible();
 
   stage = 'ADMIN UI metadata edit';
-  await page.getByRole('button', { name: 'Pusat Data Master (CRUD)', exact: true }).click();
+  await page.getByRole('button', { name: 'Pengelolaan Data', exact: true }).click();
   await page.getByLabel('Cari katalog', { exact: true }).fill(indicatorId);
   await budget();
   await row(page).getByRole('button', { name: 'Ubah', exact: true }).click();
@@ -233,7 +233,7 @@ try {
   await budget(65);
   await dinkes.page.getByLabel('Puskesmas', { exact: true }).selectOption(otherCenter.id);
   await ready(dinkes.page, otherCenter.id);
-  await dinkes.page.getByRole('button', { name: 'Pusat Data Master (CRUD)', exact: true }).click();
+  await dinkes.page.getByRole('button', { name: 'Pengelolaan Data', exact: true }).click();
   await expect(dinkes.page.getByRole('button', { name: 'Tambah Indikator', exact: true })).toBeEnabled();
   await dinkes.page.getByLabel('Cari katalog', { exact: true }).fill(indicatorId);
   await expect(row(dinkes.page)).toContainText(`${name} admin edited`);
@@ -279,25 +279,25 @@ try {
   // Refresh the existing ADMIN session, never log in again to discover the PIC.
   await page.reload();
   await ready(page);
-  await page.getByRole('button', { name: 'Pusat Data Master (CRUD)', exact: true }).click();
-  await page.getByRole('button', { name: 'Master Pengguna & Staf PIC', exact: true }).click();
-  const resetButton = page.locator('div').filter({ has: page.getByText(picName, { exact: true }) }).filter({ has: page.getByRole('button', { name: 'Reset Password', exact: true }) }).last().getByRole('button', { name: 'Reset Password', exact: true });
+  await page.getByRole('button', { name: 'Pengelolaan Data', exact: true }).click();
+  await page.getByRole('button', { name: 'Pengguna dan Staf PIC', exact: true }).click();
+  const resetButton = page.locator('div').filter({ has: page.getByText(picName, { exact: true }) }).filter({ has: page.getByRole('button', { name: 'Atur ulang kata sandi', exact: true }) }).last().getByRole('button', { name: 'Atur ulang kata sandi', exact: true });
   await resetButton.click();
-  const dialog = page.getByRole('dialog', { name: `Reset password ${picName}`, exact: true });
-  for (const label of ['Password baru', 'Konfirmasi password baru', 'Alasan reset password']) await expect(dialog.getByLabel(label, { exact: true })).toHaveAttribute('required', '');
-  await dialog.getByLabel('Password baru', { exact: true }).fill(newPassword);
-  await dialog.getByLabel('Konfirmasi password baru', { exact: true }).fill(newPassword);
-  await dialog.getByLabel('Alasan reset password', { exact: true }).fill(`Browser session revocation ${suffix}`);
+  const dialog = page.getByRole('dialog', { name: `Atur ulang kata sandi ${picName}`, exact: true });
+  for (const label of ['Kata sandi baru', 'Konfirmasi kata sandi baru', 'Alasan pengaturan ulang kata sandi']) await expect(dialog.getByLabel(label, { exact: true })).toHaveAttribute('required', '');
+  await dialog.getByLabel('Kata sandi baru', { exact: true }).fill(newPassword);
+  await dialog.getByLabel('Konfirmasi kata sandi baru', { exact: true }).fill(newPassword);
+  await dialog.getByLabel('Alasan pengaturan ulang kata sandi', { exact: true }).fill(`Browser session revocation ${suffix}`);
   await budget();
   const resetPromise = page.waitForResponse(response => new URL(response.url()).pathname.endsWith(`/users/${pic.id}/reset-password`) && response.request().method() === 'POST');
-  await dialog.getByRole('button', { name: 'Reset Password dan Cabut Sesi', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Atur ulang kata sandi', exact: true }).click();
   const resetResponse = await resetPromise;
   assert.equal(resetResponse.status(), 201);
   const reset = data(await resetResponse.json());
   assert.equal(reset.id, pic.id);
   assert.ok(reset.sessionsRevoked >= 1, 'Reset revokes the captured PIC session');
   await expect(dialog).toHaveCount(0);
-  await expect(page.getByRole('status').filter({ hasText: `Password ${picName} berhasil direset.` })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: `Kata sandi akun ${picName} berhasil diatur ulang. Pengguna perlu masuk kembali pada semua perangkat.` })).toBeVisible();
   await ready(page);
   // Expected authentication failures stay in Node fetch, not browser error logs.
   await api('/auth/me', oldSession.accessToken, 'GET', undefined, 401);

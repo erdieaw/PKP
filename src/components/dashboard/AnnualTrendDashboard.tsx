@@ -152,19 +152,19 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
           <div className="space-y-2">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 text-xs font-semibold">
               <CalendarRange className="w-3.5 h-3.5" />
-              <span>SIPKP PULSE • Rekapitulasi Tahunan (12 Kolom Bulanan)</span>
+              <span>Januari sampai Desember</span>
             </div>
             <h2 className="text-2xl sm:text-3xl font-black tracking-tight text-white">
-              Dashboard Kinerja Tahunan (12 Bulan)
+              Tren Kinerja Bulanan
             </h2>
             <p className="text-slate-300 text-xs max-w-2xl leading-relaxed">
-              Pemantauan kinerja Januari hingga Desember (Tahun Anggaran {currentYear}). Menampilkan {trendData.klasters.length} Klaster dan {trendData.subKlasters.length} Sub-klaster dari analitik server. Nilai yang belum tersedia ditampilkan sebagai tanda -.
+              Bandingkan kinerja tiap bulan pada tahun {currentYear} untuk {trendData.klasters.length} klaster dan {trendData.subKlasters.length} subklaster. Tanda - berarti nilai belum tersedia, bukan nol. Tren bulanan bukan pengganti rekap penilaian tahunan DO 2026.
             </p>
           </div>
 
           <div className="flex items-center gap-4 sm:gap-6 bg-obsidian-850/90 backdrop-blur-md p-4 sm:p-5 rounded-2xl border border-obsidian-700/80 shadow-inner shrink-0">
             <div className="text-right">
-              <p className="text-[11px] text-slate-400 font-medium">Rerata Tahunan (YTD)</p>
+              <p className="text-[11px] text-slate-400 font-medium">Rata-rata Skor Bulanan (V1)</p>
               <div className="text-3xl sm:text-4xl font-black font-mono text-emerald-400">
                 {formatNumber(trendData.annualAveragePKP, '%')}
               </div>
@@ -177,12 +177,12 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
             </div>
             <div className="h-12 w-px bg-obsidian-700" />
             <div>
-              <p className="text-[11px] text-slate-400 font-medium">Status Periode</p>
+              <p className="text-[11px] text-slate-400 font-medium">Rentang Tampilan</p>
               <div className="text-xl sm:text-2xl font-bold font-mono text-white">
                 12 Bulan
               </div>
               <p className="text-[10px] text-emerald-300 font-mono">
-                TA {currentYear} Aktif
+                Tahun {currentYear}
               </p>
             </div>
           </div>
@@ -565,7 +565,7 @@ export const AnnualTrendDashboard: React.FC<AnnualTrendDashboardProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
-              {((viewMode === 'INDICATOR' && !filteredIndicators.length) || (viewMode === 'KLASTER' && !trendData.klasters.some(k => selectedKlaster === 0 || k.klasterId === selectedKlaster))) && <tr><td colSpan={viewMode === 'INDICATOR' ? 19 : 17} className="p-6 text-center text-slate-500">Tidak ada data tren yang sesuai dengan filter ini.</td></tr>}
+              {((viewMode === 'INDICATOR' && !filteredIndicators.length) || (viewMode === 'KLASTER' && !trendData.klasters.some(k => selectedKlaster === 0 || k.klasterId === selectedKlaster))) && <tr><td colSpan={viewMode === 'INDICATOR' ? 19 : 17} className="p-6 text-center text-slate-500">Tidak ada data yang sesuai dengan filter. Ubah filter untuk melihat data lain.</td></tr>}
               {/* ===================== VIEW MODE 1: KLASTER & SUBKLASTER ===================== */}
               {viewMode === 'KLASTER' && (
                 <>

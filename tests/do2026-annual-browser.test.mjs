@@ -372,7 +372,7 @@ test('annual-only DO frontend with isolated browser fixtures', async t => {
       await page.getByText('Kelayakan kohort belum dapat dipastikan dari sumber.', { exact: true }).waitFor();
       await noWrites(page);
       await page.evaluate(() => window.annualFixture.render({ held: false }));
-      await page.getByRole('button', { name: 'Muat ulang rekap dari server', exact: true }).click();
+      await page.getByRole('button', { name: 'Muat ulang rekap', exact: true }).click();
       await page.getByText('Definisi Operasional', { exact: false }).click();
       await page.getByText('Profil pengukuran tersedia sesuai periode dan ketentuan DO. Pengukuran atau ketercapaian target tidak selalu disertai skor kinerja.', { exact: true }).waitFor();
     }));

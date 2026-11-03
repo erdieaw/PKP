@@ -86,7 +86,12 @@ test('startup background remains consistent before scripts and through session l
           await page.getByText('Memuat sesi dan data SIPKP...', { exact: true }).waitFor();
           assert.deepEqual(await surface(), loading);
           await page.evaluate(() => window.loadingFixtureResolve());
-          await page.getByLabel('Username', { exact: true }).waitFor();
+          await page.getByLabel('Nama pengguna', { exact: true }).waitFor();
+          assert.equal(await page.getByRole('heading', { name: 'Masuk ke SIPKP', level: 1, exact: true }).isVisible(), true);
+          assert.equal(await page.getByRole('region', { name: 'Masuk ke SIPKP', exact: true }).count(), 1);
+          assert.equal(await page.getByLabel('Nama pengguna', { exact: true }).getAttribute('placeholder'), 'Masukkan nama pengguna');
+          assert.equal(await page.getByLabel('Kata sandi', { exact: true }).isVisible(), true);
+          assert.equal(await page.getByLabel('Username', { exact: true }).count(), 0);
           assert.deepEqual(await surface(), loading);
 
           assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);

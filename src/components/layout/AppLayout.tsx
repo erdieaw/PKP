@@ -30,9 +30,11 @@ export function AppLayout(props: AppLayoutProps) {
   useSyncExternalStore(pkpStore.subscribe, pkpStore.getSnapshot, pkpStore.getServerSnapshot);
   const [activeTab, setActiveTab] = useState<NavTab>(props.currentUser.role === 'PIC' ? 'dashboard-pic' : 'dashboard-exec');
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
+  const [sidebarExpanded, setSidebarExpanded] = useState(true);
   const scopeKey = `${props.currentUser.id}:${pkpStore.getSelectedHealthCenterId()}:${pkpStore.getCurrentYear()}`;
   return <ScopedLayout key={scopeKey} {...props} activeTab={activeTab} setActiveTab={setActiveTab}
-    selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} />;
+    selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth}
+    sidebarExpanded={sidebarExpanded} setSidebarExpanded={setSidebarExpanded} />;
 }
 
 interface ScopedLayoutProps extends AppLayoutProps {
@@ -40,9 +42,11 @@ interface ScopedLayoutProps extends AppLayoutProps {
   setActiveTab: (tab: NavTab) => void;
   selectedMonth: number;
   setSelectedMonth: (month: number) => void;
+  sidebarExpanded: boolean;
+  setSidebarExpanded: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
-const ScopedLayout: React.FC<ScopedLayoutProps> = ({ currentUser, onLogout, activeTab, setActiveTab, selectedMonth, setSelectedMonth }) => {
+const ScopedLayout: React.FC<ScopedLayoutProps> = ({ currentUser, onLogout, activeTab, setActiveTab, selectedMonth, setSelectedMonth, sidebarExpanded, setSidebarExpanded }) => {
   const globalMode = !pkpStore.getSelectedHealthCenterId() || !pkpStore.getYears().some(period => period.year === pkpStore.getCurrentYear());
   const [selectedKlaster, setSelectedKlaster] = useState<number>(0); // 0 = Semua
   const selectedPuskesmas = pkpStore.getSelectedHealthCenter()?.name || '';
@@ -110,7 +114,7 @@ const ScopedLayout: React.FC<ScopedLayoutProps> = ({ currentUser, onLogout, acti
     <div className="flex h-screen overflow-hidden bg-slate-50">
       {/* Sidebar */}
       {navigationOpen && <button aria-label="Tutup navigasi" onClick={() => setNavigationOpen(false)} className="fixed inset-0 z-30 bg-slate-900/60 md:hidden" />}
-      <div className={`${navigationOpen ? 'fixed inset-y-0 left-0 z-40' : 'hidden'} md:relative md:block md:z-20`}>
+      <div id="app-sidebar" className={`${navigationOpen ? 'fixed inset-y-0 left-0 z-40' : 'hidden'} md:relative ${sidebarExpanded ? 'md:block' : 'md:hidden'} md:z-20`}>
       <Sidebar
         activeTab={visibleTab}
         onSelectTab={tab => {
@@ -126,6 +130,10 @@ const ScopedLayout: React.FC<ScopedLayoutProps> = ({ currentUser, onLogout, acti
         busy={busy}
         selectedPuskesmas={selectedPuskesmas}
         onClose={() => setNavigationOpen(false)}
+        onCollapse={() => {
+          setSidebarExpanded(false);
+          document.getElementById('desktop-navigation-toggle')?.focus();
+        }}
         onOpenYearModal={() => { if (!busy && canManage) setIsYearModalOpen(true); setNavigationOpen(false); }}
         onOpenStaffModal={() => { if (!busy && !globalMode && canManage) setIsStaffModalOpen(true); setNavigationOpen(false); }}
         onOpenExportModal={() => { if (!busy && !globalMode && canManage) setIsExportModalOpen(true); setNavigationOpen(false); }}
@@ -144,6 +152,9 @@ const ScopedLayout: React.FC<ScopedLayoutProps> = ({ currentUser, onLogout, acti
           busy={busy}
           globalMode={globalMode}
           onOpenNavigation={() => setNavigationOpen(true)}
+          navigationOpen={navigationOpen}
+          sidebarExpanded={sidebarExpanded}
+          onToggleSidebar={() => setSidebarExpanded(expanded => !expanded)}
           currentUser={currentUser}
           onOpenYearModal={() => setIsYearModalOpen(true)}
           onOpenExportModal={() => setIsExportModalOpen(true)}
