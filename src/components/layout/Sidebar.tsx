@@ -79,7 +79,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'data-entry' as NavTab, label: 'Input Capaian Bulanan', icon: ClipboardPen },
     { id: 'target-setting' as NavTab, label: 'Target Sasaran Tahunan', icon: Target },
     { id: 'pic-matrix' as NavTab, label: 'Penugasan PIC', icon: UserCheck },
-    { id: 'recommendations' as NavTab, label: 'Rekomendasi Dinkes & RTL', icon: MessageSquareCheck },
+    ...(userRole === 'DINKES_ADMIN' ? [{ id: 'recommendations' as NavTab, label: 'Rekomendasi Dinkes & RTL', icon: MessageSquareCheck }] : []),
     { id: 'master-data' as NavTab, label: 'Pengelolaan Data', icon: Building2 },
     ...(isDinkesMode ? [{ id: 'dinkes-supervision' as NavTab, label: 'Supervisi Wilayah', icon: Trophy }] : [])
   ];

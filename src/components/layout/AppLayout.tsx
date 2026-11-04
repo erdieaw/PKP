@@ -221,7 +221,7 @@ const ScopedLayout: React.FC<ScopedLayoutProps> = ({ currentUser, onLogout, acti
               <PicAssignmentView />
             )}
 
-            {visibleTab === 'recommendations' && (
+            {visibleTab === 'recommendations' && userRole !== 'ADMIN_PUSKESMAS' && (
               <RecommendationView />
             )}
 

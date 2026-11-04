@@ -1,12 +1,13 @@
 import React, { useEffect, useState, useSyncExternalStore } from 'react';
 import { pkpStore, type ManagedHealthCenter } from '../../services/apiStore';
 import type { AdminPuskesmasUser, PicUser } from '../../types/pkp';
-import { Database, Layers, Building2, Users, History, Plus, Edit2, X, CheckCircle2, ShieldCheck } from 'lucide-react';
+import { Database, Layers, Building2, Users, History, Plus, Edit2, X, CheckCircle2, ShieldCheck, MessageSquareCheck } from 'lucide-react';
 import { CatalogManager } from './CatalogManager';
 import { ResetPasswordDialog } from './ResetPasswordDialog';
 import { ProvinceIntegrationPanel } from './ProvinceIntegrationPanel';
+import { RecommendationView } from '../recommendation/RecommendationView';
 
-type MasterTab = 'indicators' | 'subklasters' | 'puskesmas' | 'users' | 'audit-logs' | 'province';
+type MasterTab = 'indicators' | 'subklasters' | 'puskesmas' | 'users' | 'audit-logs' | 'province' | 'evaluation';
 interface MasterDataHubProps {
   selectedMonth: number;
   isDinkesMode?: boolean;
@@ -23,6 +24,7 @@ export const MasterDataHub: React.FC<MasterDataHubProps> = ({ selectedMonth }) =
   const isDinkes = user.role === 'DINKES_ADMIN';
   const centerId = pkpStore.getSelectedHealthCenterId();
   const canManagePics = user.role === 'ADMIN_PUSKESMAS' && user.healthCenterId === centerId;
+  const canEvaluate = canManagePics && pkpStore.getYears().some(period => period.year === pkpStore.getCurrentYear());
   const [activeTab, setActiveTab] = useState<MasterTab>('indicators');
   const [userTab, setUserTab] = useState<'admins' | 'pics'>('admins');
   const [modal, setModal] = useState<'center' | 'user' | null>(null);
@@ -119,10 +121,12 @@ export const MasterDataHub: React.FC<MasterDataHubProps> = ({ selectedMonth }) =
         ['users', 'Pengguna dan Staf PIC', Users],
         ['audit-logs', 'Riwayat Aktivitas', History],
       ] as const).map(([id, label, Icon]) => <button key={id} disabled={pending} onClick={() => setActiveTab(id)} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap ${activeTab === id ? 'bg-slate-900 text-white' : 'bg-white text-slate-600 border border-slate-200'}`}><Icon className="w-3.5 h-3.5" />{label}</button>)}
+      {canEvaluate && <button disabled={disabled} onClick={() => setActiveTab('evaluation')} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap ${activeTab === 'evaluation' ? 'bg-slate-900 text-white' : 'bg-white text-slate-600 border border-slate-200'}`}><MessageSquareCheck className="w-3.5 h-3.5" />Evaluasi</button>}
       {canManagePics && <button disabled={disabled} onClick={() => setActiveTab('province')} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap ${activeTab === 'province' ? 'bg-slate-900 text-white' : 'bg-white text-slate-600 border border-slate-200'}`}>Integrasi Provinsi</button>}
     </div>
 
     {(activeTab === 'indicators' || activeTab === 'subklasters') && <CatalogManager kind={activeTab} />}
+    {activeTab === 'evaluation' && canEvaluate && <RecommendationView />}
     {activeTab === 'province' && canManagePics && <ProvinceIntegrationPanel key={`${user.id}:${centerId}:${pkpStore.getActivePeriod()?.revision}:${selectedMonth}`} selectedMonth={selectedMonth} />}
     {activeTab === 'puskesmas' && <div className="space-y-4">
       <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-wrap items-center justify-between gap-3"><div><h3 className="font-bold text-sm text-slate-800">Daftar Puskesmas</h3><p className="text-xs text-slate-500">Saat Puskesmas diarsipkan, data dan riwayat aktivitas tetap disimpan. Semua sesi pengguna Puskesmas ini diakhiri dan pengguna tidak dapat masuk sampai Puskesmas dipulihkan.</p></div>{isDinkes && <button disabled={disabled} onClick={() => { setEditingCenter(null); setCenter({ ...emptyCenter }); setError(null); setModal('center'); }} className={buttonClass}><Plus className="w-3.5 h-3.5" />Tambah Puskesmas</button>}</div>
