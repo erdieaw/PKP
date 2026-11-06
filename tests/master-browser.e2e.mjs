@@ -22,6 +22,7 @@ const requests = [];
 const secrets = [password, newPassword];
 let browser;
 let admin;
+let dinkes;
 let activePage;
 let fixture;
 let stage = 'rebuilt backend readiness';
@@ -104,7 +105,16 @@ async function login(username, role) {
   await ready(page);
   await page.getByRole('button', { name: 'Pengelolaan Data', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Pengelolaan Data', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Tambah Indikator', exact: true })).toBeEnabled();
+  if (role === 'DINKES_ADMIN') {
+    await expect(page.getByRole('button', { name: 'Tambah Indikator', exact: true })).toBeEnabled();
+  } else if (role === 'ADMIN_PUSKESMAS') {
+    for (const name of [/^Indikator \(/, /^Klaster dan Bagian \(/, /^Puskesmas \(/]) {
+      await expect(page.getByRole('button', { name })).toHaveCount(0);
+    }
+    await expect(page.getByRole('button', { name: 'Tambah Indikator', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Pengguna dan Staf PIC', exact: true })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Evaluasi', exact: true })).toBeEnabled();
+  }
   return { page, context, token: session.accessToken };
 }
 
@@ -157,10 +167,13 @@ try {
   console.log('Waiting 61s before login to avoid prior runs sharing the five-login IP window.');
   await delay(61_000);
   browser = await chromium.launch({ headless: true });
-  stage = 'ADMIN UI login and global section creation';
+  stage = 'ADMIN UI restricted master tabs and retained Evaluasi access';
   admin = await login(fixture.adminUsername, 'ADMIN_PUSKESMAS');
   const page = admin.page;
   try {
+  stage = 'Dinkes UI login and global section creation';
+  dinkes = await login(fixture.dinkesUsername, 'DINKES_ADMIN');
+  const page = dinkes.page;
   await budget();
   await page.getByRole('button', { name: /^Klaster dan Bagian \(/ }).click();
   await page.getByRole('button', { name: 'Tambah Bagian', exact: true }).click();
@@ -173,11 +186,11 @@ try {
   await mutation(page, '/master/sections', 'POST', () => page.getByRole('button', { name: 'Simpan Global', exact: true }).click(), 201);
   await page.getByLabel('Cari katalog', { exact: true }).fill(sectionCode);
   await expect(page.getByRole('cell', { name, exact: true })).toBeVisible();
-  const section = items(await api('/master/sections', admin.token)).find(entry => entry.code === sectionCode);
+  const section = items(await api('/master/sections', dinkes.token)).find(entry => entry.code === sectionCode);
   assert.equal(section?.parentCode, null);
   assert.equal(section?.klasterId, 1);
 
-  stage = 'ADMIN UI full indicator creation and monthly visibility';
+  stage = 'Dinkes UI full indicator creation and ADMIN monthly visibility';
   await budget();
   await page.getByRole('button', { name: /^Indikator \(/ }).click();
   await page.getByLabel('Cari katalog', { exact: true }).fill('');
@@ -194,40 +207,44 @@ try {
   await mutation(page, '/master/indicators', 'POST', () => page.getByRole('button', { name: 'Simpan Global', exact: true }).click(), 201);
   await page.getByLabel('Cari katalog', { exact: true }).fill(indicatorId);
   await expect(row(page)).toContainText(name);
-  const created = await persisted(admin.token, { klasterId: 1, sectionCode, no: '1', kegiatan: fields.Kegiatan, indikator: name, satuan: '%', targetDisplay: '90%', polarity: 'HIGHER_IS_BETTER', notes: fields.Catatan });
+  const created = await persisted(dinkes.token, { klasterId: 1, sectionCode, no: '1', kegiatan: fields.Kegiatan, indikator: name, satuan: '%', targetDisplay: '90%', polarity: 'HIGHER_IS_BETTER', notes: fields.Catatan });
   assert.equal(created.formulaRaw ?? created.formulaKinerjaRaw, fields['Formula (metadata saja)']);
   for (const [key, value] of Object.entries({ targetNumeric: 90, totalSasaranDefault: 100, targetSasaranDefault: 90 })) assert.equal(Number(created[key]), value, `Persisted ${key}`);
   assert.ok(items(await api('/records/monthly?year=2026&month=1', admin.token)).some(entry => entry.indicatorId === indicatorId), 'Own-center monthly API includes global indicator');
-  await page.getByRole('button', { name: 'Input Capaian Bulanan', exact: true }).click();
-  await page.getByPlaceholder('Cari kode, indikator, atau sub-klaster...').fill(name);
-  await expect(page.getByRole('button', { name: `Rincian indikator ${sectionCode}.1`, exact: true })).toBeVisible();
+  activePage = admin.page;
+  await budget(45);
+  await admin.page.reload();
+  await ready(admin.page);
+  await admin.page.getByRole('button', { name: 'Input Capaian Bulanan', exact: true }).click();
+  await admin.page.getByPlaceholder('Cari kode, indikator, atau sub-klaster...').fill(name);
+  await expect(admin.page.getByRole('button', { name: `Rincian indikator ${sectionCode}.1`, exact: true })).toBeVisible();
 
-  stage = 'ADMIN UI metadata edit';
+  stage = 'Dinkes UI metadata edit';
+  activePage = page;
   await page.getByRole('button', { name: 'Pengelolaan Data', exact: true }).click();
   await page.getByLabel('Cari katalog', { exact: true }).fill(indicatorId);
   await budget();
   await row(page).getByRole('button', { name: 'Ubah', exact: true }).click();
-  await page.getByLabel('Indikator', { exact: true }).fill(`${name} admin edited`);
-  await page.getByLabel('Catatan', { exact: true }).fill('Admin metadata persisted');
+  await page.getByLabel('Indikator', { exact: true }).fill(`${name} Dinkes edited`);
+  await page.getByLabel('Catatan', { exact: true }).fill('Dinkes metadata persisted');
   await mutation(page, `/master/indicators/${indicatorId}`, 'PATCH', () => page.getByRole('button', { name: 'Simpan Global', exact: true }).click());
-  await expect(row(page)).toContainText(`${name} admin edited`);
-  await persisted(admin.token, { indikator: `${name} admin edited`, notes: 'Admin metadata persisted' });
+  await expect(row(page)).toContainText(`${name} Dinkes edited`);
+  await persisted(dinkes.token, { indikator: `${name} Dinkes edited`, notes: 'Dinkes metadata persisted' });
 
-  stage = 'ADMIN UI archive and restore';
+  stage = 'Dinkes UI archive and restore';
   await budget();
   await mutation(page, `/master/indicators/${indicatorId}`, 'DELETE', () => row(page).getByRole('button', { name: 'Arsipkan', exact: true }).click());
   await expect(row(page)).toHaveCount(0);
-  assert.ok(!items(await api('/master/indicators', admin.token)).some(entry => entry.id === indicatorId));
+  assert.ok(!items(await api('/master/indicators', admin.token)).some(entry => entry.id === indicatorId), 'ADMIN operational catalog excludes archived indicators');
   await page.getByLabel('Tampilkan arsip', { exact: true }).check();
   await expect(row(page).getByRole('cell', { name: 'Arsip', exact: true })).toBeVisible();
-  await persisted(admin.token, { isActive: false });
+  await persisted(dinkes.token, { isActive: false });
   await budget();
   await mutation(page, `/master/indicators/${indicatorId}`, 'PATCH', () => row(page).getByRole('button', { name: 'Pulihkan', exact: true }).click());
   await expect(row(page).getByRole('cell', { name: 'Aktif', exact: true })).toBeVisible();
-  await persisted(admin.token, { isActive: true });
+  await persisted(dinkes.token, { isActive: true });
 
   stage = 'Dinkes UI global metadata write and other-center catalog';
-  const dinkes = await login(fixture.dinkesUsername, 'DINKES_ADMIN');
   const otherCenter = items(await api('/health-centers', dinkes.token)).find(center => center.id !== fixture.healthCenterId && center.isActive !== false);
   assert.ok(otherCenter, 'An independent center must exist to verify global catalog visibility');
   await budget(65);
@@ -236,21 +253,21 @@ try {
   await dinkes.page.getByRole('button', { name: 'Pengelolaan Data', exact: true }).click();
   await expect(dinkes.page.getByRole('button', { name: 'Tambah Indikator', exact: true })).toBeEnabled();
   await dinkes.page.getByLabel('Cari katalog', { exact: true }).fill(indicatorId);
-  await expect(row(dinkes.page)).toContainText(`${name} admin edited`);
+  await expect(row(dinkes.page)).toContainText(`${name} Dinkes edited`);
   await row(dinkes.page).getByRole('button', { name: 'Ubah', exact: true }).click();
-  await dinkes.page.getByLabel('Indikator', { exact: true }).fill(`${name} Dinkes edited`);
+  await dinkes.page.getByLabel('Indikator', { exact: true }).fill(`${name} Dinkes cross-center edited`);
   await dinkes.page.getByLabel('Catatan', { exact: true }).fill('Dinkes global metadata persisted');
   const changed = dinkes.page.waitForResponse(response => new URL(response.url()).pathname.endsWith(`/master/indicators/${indicatorId}`) && response.request().method() === 'PATCH');
   await dinkes.page.getByRole('button', { name: 'Simpan Global', exact: true }).click();
   assert.equal((await changed).status(), 200);
   await expect(dinkes.page.getByRole('status').filter({ hasText: 'Katalog global berhasil diperbarui.' })).toBeVisible();
-  await expect(row(dinkes.page)).toContainText(`${name} Dinkes edited`);
+  await expect(row(dinkes.page)).toContainText(`${name} Dinkes cross-center edited`);
   await ready(dinkes.page, otherCenter.id);
-  await persisted(admin.token, { indikator: `${name} Dinkes edited`, notes: 'Dinkes global metadata persisted' });
+  await persisted(dinkes.token, { indikator: `${name} Dinkes cross-center edited`, notes: 'Dinkes global metadata persisted' });
   const monthly = items(await api(`/records/monthly?year=2026&month=1&healthCenterId=${otherCenter.id}`, dinkes.token));
   assert.ok(monthly.some(entry => entry.indicatorId === indicatorId), 'Other-center monthly API includes global indicator');
   await dinkes.page.getByRole('button', { name: 'Input Capaian Bulanan', exact: true }).click();
-  await dinkes.page.getByPlaceholder('Cari kode, indikator, atau sub-klaster...').fill(`${name} Dinkes edited`);
+  await dinkes.page.getByPlaceholder('Cari kode, indikator, atau sub-klaster...').fill(`${name} Dinkes cross-center edited`);
   await expect(dinkes.page.getByRole('button', { name: `Rincian indikator ${sectionCode}.1`, exact: true })).toBeVisible();
   } catch (error) {
     console.error(redact(`FAIL at ${stage}: ${error.message}`));
@@ -326,15 +343,15 @@ try {
   process.exitCode = 1;
 } finally {
   await browser?.close();
-  if (admin && cleanupNeeded) {
+  if (dinkes && cleanupNeeded) {
     try {
       await budget(8);
-      const catalog = items(await api('/master/indicators?includeArchived=true', admin.token));
-      if (catalog.some(entry => entry.id === indicatorId && entry.isActive !== false)) await api(`/master/indicators/${indicatorId}`, admin.token, 'DELETE');
-      const sections = items(await api('/master/sections?includeArchived=true', admin.token));
-      if (sections.some(entry => entry.code === sectionCode && entry.isActive !== false)) await api(`/master/sections/${sectionCode}`, admin.token, 'DELETE');
-      if (catalog.some(entry => entry.id === indicatorId)) await persisted(admin.token, { isActive: false });
-      const retained = items(await api('/master/sections?includeArchived=true', admin.token)).find(entry => entry.code === sectionCode);
+      const catalog = items(await api('/master/indicators?includeArchived=true', dinkes.token));
+      if (catalog.some(entry => entry.id === indicatorId && entry.isActive !== false)) await api(`/master/indicators/${indicatorId}`, dinkes.token, 'DELETE');
+      const sections = items(await api('/master/sections?includeArchived=true', dinkes.token));
+      if (sections.some(entry => entry.code === sectionCode && entry.isActive !== false)) await api(`/master/sections/${sectionCode}`, dinkes.token, 'DELETE');
+      if (catalog.some(entry => entry.id === indicatorId)) await persisted(dinkes.token, { isActive: false });
+      const retained = items(await api('/master/sections?includeArchived=true', dinkes.token)).find(entry => entry.code === sectionCode);
       if (retained) assert.equal(retained.isActive, false);
       console.log('Cleanup: test indicator and section archived; fixture accounts and audit history retained.');
     } catch (error) {
@@ -343,4 +360,4 @@ try {
     }
   }
 }
-if (passed && !process.exitCode) console.log('PASS: real ADMIN/Dinkes global catalog CRUD, cross-center monthly visibility, and PIC password reset/session revocation.');
+if (passed && !process.exitCode) console.log('PASS: real Dinkes global catalog CRUD, ADMIN master-tab restrictions with Evaluasi access, cross-center monthly visibility, and ADMIN PIC password reset/session revocation.');

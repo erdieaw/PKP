@@ -16,8 +16,8 @@ export class MastersService {
   constructor(private readonly db: DbService) {}
 
   private mutate<T>(actor: Actor, operation: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
-    // Both administrator roles intentionally edit the GLOBAL catalogue, never a tenant copy.
-    requireRoles(actor, Role.ADMIN_PUSKESMAS, Role.DINKES_ADMIN);
+    // Only Dinkes may edit the GLOBAL catalogue, never a tenant copy.
+    requireRoles(actor, Role.DINKES_ADMIN);
     return this.db.$transaction(async tx => {
       // Same lock order as year-scoped writes/submission, acquired before reading the catalogue.
       await tx.$queryRaw`SELECT "year" FROM "year_periods" ORDER BY "year" ASC FOR UPDATE`;

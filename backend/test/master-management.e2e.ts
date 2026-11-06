@@ -93,10 +93,10 @@ test('real master management: global catalogue, tenant administration and passwo
     };
     let current: Indicator;
 
-    await t.test('ADMIN creates a global section and indicator visible to other tenants and PICs', async () => {
-      await request('POST', '/master/sections', 201, a.accessToken, { code, name: `Master ${suffix}`, klasterId: 1, parentCode: null });
-      current = await request<Indicator>('POST', '/master/indicators', 201, a.accessToken, indicator);
-      for (const session of [b, p, pb]) {
+    await t.test('DINKES creates a global section and indicator visible to administrators and PICs', async () => {
+      await request('POST', '/master/sections', 201, d.accessToken, { code, name: `Master ${suffix}`, klasterId: 1, parentCode: null });
+      current = await request<Indicator>('POST', '/master/indicators', 201, d.accessToken, indicator);
+      for (const session of [a, b, p, pb]) {
         const catalogue = await request<Catalogue>('GET', `/master/indicators?search=${indicatorId}`, 200, session.accessToken);
         assert.deepEqual(catalogue.items.map(item => item.id), [indicatorId]);
         const sections = await request<Section[]>('GET', '/master/sections', 200, session.accessToken);
@@ -105,17 +105,33 @@ test('real master management: global catalogue, tenant administration and passwo
       assert.equal((await request<Catalogue>('GET', '/master/indicators', 200, b.accessToken)).total, baseline! + 1);
     });
 
-    await t.test('PIC cannot mutate masters, health centers, users or passwords; public resets require authentication', async () => {
+    await t.test('ADMIN and PIC cannot mutate masters or health centers; operational reads remain available', async () => {
+      for (const session of [a, p]) {
+        for (const [method, path, body] of [
+          ['POST', '/master/sections', { code: `${code}.1`, name: 'Forbidden', klasterId: 1, parentCode: code }],
+          ['PATCH', `/master/sections/${code}`, { name: 'Forbidden' }],
+          ['DELETE', `/master/sections/${code}`, undefined],
+          ['POST', '/master/indicators', { ...indicator, id: `${indicatorId}_forbidden` }],
+          ['PATCH', `/master/indicators/${indicatorId}`, { notes: 'Forbidden' }],
+          ['DELETE', `/master/indicators/${indicatorId}`, undefined],
+          ['POST', '/health-centers', { code: 'forbidden', name: 'Forbidden', district: 'Test' }],
+          ['PATCH', `/health-centers/${centerA.id}`, { name: 'Forbidden' }],
+          ['DELETE', `/health-centers/${centerA.id}`, undefined],
+        ] as const) await request(method, path, 403, session.accessToken, body);
+        for (const path of ['/master/indicators', '/master/sections']) {
+          await request('GET', `${path}?includeArchived=true`, 403, session.accessToken);
+          await request('GET', `${path}?includeArchived=false`, 200, session.accessToken);
+        }
+        for (const path of ['/health-centers', `/health-centers?healthCenterId=${centerA.id}`]) {
+          const centers = await request<{ id: string }[]>('GET', path, 200, session.accessToken);
+          assert.deepEqual(centers.map(center => center.id), [centerA.id]);
+        }
+        await request('GET', `/health-centers?healthCenterId=${centerB.id}`, 403, session.accessToken);
+      }
+    });
+
+    await t.test('PIC cannot mutate users or passwords; public resets require authentication', async () => {
       for (const [method, path, body] of [
-        ['POST', '/master/sections', { code: `${code}.1`, name: 'Forbidden', klasterId: 1, parentCode: code }],
-        ['PATCH', `/master/sections/${code}`, { name: 'Forbidden' }],
-        ['DELETE', `/master/sections/${code}`, undefined],
-        ['POST', '/master/indicators', { ...indicator, id: `${indicatorId}_forbidden` }],
-        ['PATCH', `/master/indicators/${indicatorId}`, { notes: 'Forbidden' }],
-        ['DELETE', `/master/indicators/${indicatorId}`, undefined],
-        ['POST', '/health-centers', { code: 'forbidden', name: 'Forbidden', district: 'Test' }],
-        ['PATCH', `/health-centers/${centerA.id}`, { name: 'Forbidden' }],
-        ['DELETE', `/health-centers/${centerA.id}`, undefined],
         ['POST', '/users/pics', { username: `mm-${randomUUID()}`, name: 'Forbidden', password }],
         ['PATCH', `/users/${picB.id}`, { name: 'Forbidden' }],
         ['DELETE', `/users/${picB.id}`, undefined],
@@ -125,16 +141,16 @@ test('real master management: global catalogue, tenant administration and passwo
     });
 
     await t.test('hierarchy, immutable keys, unknown tiered rules, nulls and archive query booleans are validated', async () => {
-      await request('POST', '/master/sections', 400, a.accessToken, { code: `${code}.1`, name: 'Mismatch', klasterId: 2, parentCode: code });
-      await request('POST', '/master/sections', 400, a.accessToken, { code: `${code}.1`, name: 'Missing parent', klasterId: 1, parentCode: null });
-      await request('POST', '/master/indicators', 400, a.accessToken, { ...indicator, id: `${indicatorId}_mismatch`, klasterId: 2 });
-      await request('POST', '/master/indicators', 400, a.accessToken, { ...indicator, id: `${indicatorId}_tiered`, polarity: Polarity.TIERED_BRACKETS });
-      await request('PATCH', `/master/indicators/${indicatorId}`, 400, a.accessToken, { id: 'replacement' });
-      await request('PATCH', `/master/sections/${code}`, 400, a.accessToken, { code: `${code}.1` });
+      await request('POST', '/master/sections', 400, d.accessToken, { code: `${code}.1`, name: 'Mismatch', klasterId: 2, parentCode: code });
+      await request('POST', '/master/sections', 400, d.accessToken, { code: `${code}.1`, name: 'Missing parent', klasterId: 1, parentCode: null });
+      await request('POST', '/master/indicators', 400, d.accessToken, { ...indicator, id: `${indicatorId}_mismatch`, klasterId: 2 });
+      await request('POST', '/master/indicators', 400, d.accessToken, { ...indicator, id: `${indicatorId}_tiered`, polarity: Polarity.TIERED_BRACKETS });
+      await request('PATCH', `/master/indicators/${indicatorId}`, 400, d.accessToken, { id: 'replacement' });
+      await request('PATCH', `/master/sections/${code}`, 400, d.accessToken, { code: `${code}.1` });
       for (const field of ['targetNumeric', 'isActive', 'indikator', 'expectedUpdatedAt']) {
-        await request('PATCH', `/master/indicators/${indicatorId}`, 400, a.accessToken, { [field]: null });
+        await request('PATCH', `/master/indicators/${indicatorId}`, 400, d.accessToken, { [field]: null });
       }
-      await request('PATCH', `/master/sections/${code}`, 400, a.accessToken, { name: null });
+      await request('PATCH', `/master/sections/${code}`, 400, d.accessToken, { name: null });
       for (const path of ['/master/indicators', '/master/sections']) {
         for (const value of ['1', 'TRUE', 'null', '']) await request('GET', `${path}?includeArchived=${value}`, 400, b.accessToken);
         await request('GET', `${path}?includeArchived=false`, 200, p.accessToken);
@@ -142,14 +158,13 @@ test('real master management: global catalogue, tenant administration and passwo
       }
     });
 
-    await t.test('both administrator roles update metadata and reject stale optimistic versions', async () => {
+    await t.test('DINKES updates metadata and rejects stale optimistic versions', async () => {
       const original = current.updatedAt;
-      current = await request<Indicator>('PATCH', `/master/indicators/${indicatorId}`, 200, a.accessToken, { indikator: 'ADMIN metadata', expectedUpdatedAt: original });
+      current = await request<Indicator>('PATCH', `/master/indicators/${indicatorId}`, 200, d.accessToken, { indikator: 'Initial DINKES metadata', expectedUpdatedAt: original });
       await request('PATCH', `/master/indicators/${indicatorId}`, 409, d.accessToken, { notes: 'Stale', expectedUpdatedAt: original });
       const previous = current.updatedAt;
       current = await request<Indicator>('PATCH', `/master/indicators/${indicatorId}`, 200, d.accessToken, { indikator: 'DINKES metadata', expectedUpdatedAt: previous, formulaRaw: null, notes: null });
-      await request('PATCH', `/master/indicators/${indicatorId}`, 409, a.accessToken, { notes: 'Stale', expectedUpdatedAt: previous });
-      await request('PATCH', `/master/sections/${code}`, 200, a.accessToken, { name: 'ADMIN section' });
+      await request('PATCH', `/master/indicators/${indicatorId}`, 409, d.accessToken, { notes: 'Stale', expectedUpdatedAt: previous });
       await request('PATCH', `/master/sections/${code}`, 200, d.accessToken, { name: 'DINKES section', order: 999 });
       const global = await request<Catalogue>('GET', `/master/indicators?search=${indicatorId}`, 200, b.accessToken);
       assert.equal(global.items[0]!.indikator, 'DINKES metadata');
@@ -164,28 +179,30 @@ test('real master management: global catalogue, tenant administration and passwo
       for (const body of [{ targetNumeric: 90 }, { totalSasaranDefault: 240 }, { targetSasaranDefault: 60 }, { polarity: Polarity.LOWER_IS_BETTER }]) {
         await request('PATCH', `/master/indicators/${indicatorId}`, 409, d.accessToken, body);
       }
-      await request('PATCH', `/master/indicators/${indicatorId}`, 200, a.accessToken, { notes: 'Historical records retained', indikator: 'Updated display only' });
-      await request('DELETE', `/master/sections/${code}`, 409, a.accessToken);
-      await request('DELETE', `/master/indicators/${indicatorId}`, 200, a.accessToken);
+      await request('PATCH', `/master/indicators/${indicatorId}`, 200, d.accessToken, { notes: 'Historical records retained', indikator: 'Updated display only' });
+      await request('DELETE', `/master/sections/${code}`, 409, d.accessToken);
+      await request('DELETE', `/master/indicators/${indicatorId}`, 200, d.accessToken);
       await request('DELETE', `/master/sections/${code}`, 200, d.accessToken);
       for (const session of [a, p]) {
         assert.equal((await request<Catalogue>('GET', `/master/indicators?search=${indicatorId}`, 200, session.accessToken)).total, 0);
         assert.ok(!(await request<Section[]>('GET', '/master/sections', 200, session.accessToken)).some(section => section.code === code));
       }
-      for (const session of [a, d]) {
-        const archived = await request<Catalogue>('GET', `/master/indicators?includeArchived=true&search=${indicatorId}`, 200, session.accessToken);
-        assert.equal(archived.items[0]!.isActive, false);
-        assert.equal((await request<Section[]>('GET', '/master/sections?includeArchived=true', 200, session.accessToken)).find(section => section.code === code)!.isActive, false);
+      const archived = await request<Catalogue>('GET', `/master/indicators?includeArchived=true&search=${indicatorId}`, 200, d.accessToken);
+      assert.equal(archived.items[0]!.isActive, false);
+      assert.equal((await request<Section[]>('GET', '/master/sections?includeArchived=true', 200, d.accessToken)).find(section => section.code === code)!.isActive, false);
+      for (const session of [a, p]) {
+        await request('GET', `/master/indicators?includeArchived=true&search=${indicatorId}`, 403, session.accessToken);
+        await request('GET', '/master/sections?includeArchived=true', 403, session.accessToken);
       }
       assert.deepEqual(await db.monthlyRecord.findFirstOrThrow({ where }), record);
       assert.deepEqual(await db.annualTarget.findUniqueOrThrow({ where: { id: target.id } }), target);
       for (const snapshot of snapshots) assert.deepEqual((await db.periodLock.findUniqueOrThrow({ where: { id: snapshot.id } })).snapshot, snapshot.snapshot);
-      await request('PATCH', `/master/indicators/${indicatorId}`, 400, a.accessToken, { isActive: true });
+      await request('PATCH', `/master/indicators/${indicatorId}`, 400, d.accessToken, { isActive: true });
       await request('PATCH', `/master/sections/${code}`, 200, d.accessToken, { isActive: true });
-      await request('PATCH', `/master/indicators/${indicatorId}`, 200, a.accessToken, { isActive: true });
+      await request('PATCH', `/master/indicators/${indicatorId}`, 200, d.accessToken, { isActive: true });
       assert.equal((await request<Catalogue>('GET', `/master/indicators?search=${indicatorId}`, 200, b.accessToken)).total, 1);
       await request('DELETE', `/master/indicators/${indicatorId}`, 200, d.accessToken);
-      await request('DELETE', `/master/sections/${code}`, 200, a.accessToken);
+      await request('DELETE', `/master/sections/${code}`, 200, d.accessToken);
     });
 
     await t.test('year CRUD is DINKES-only, including cutoff editing and deletion', async () => {
@@ -269,12 +286,18 @@ test('real master management: global catalogue, tenant administration and passwo
     });
 
     await t.test('health-center profile boundaries, DINKES CRUD and archival session revocation', async () => {
-      await request('PATCH', `/health-centers/${centerA.id}`, 200, a.accessToken, { name: `Updated A ${suffix}`, address: 'Integration address' });
+      const beforeA = await db.healthCenter.findUniqueOrThrow({ where: { id: centerA.id } });
+      for (const session of [a, p]) {
+        await request('PATCH', `/health-centers/${centerA.id}`, 403, session.accessToken, { name: 'Forbidden', address: 'Forbidden' });
+        await request('PATCH', `/health-centers/${centerA.id}`, 403, session.accessToken, { isActive: true });
+      }
+      assert.deepEqual(await db.healthCenter.findUniqueOrThrow({ where: { id: centerA.id } }), beforeA);
+      await request('PATCH', `/health-centers/${centerA.id}`, 200, d.accessToken, { name: `Updated A ${suffix}`, address: 'Integration address' });
       const beforeB = await db.healthCenter.findUniqueOrThrow({ where: { id: centerB.id } });
       await request('PATCH', `/health-centers/${centerB.id}`, 403, a.accessToken, { name: 'Forbidden' });
       assert.deepEqual(await db.healthCenter.findUniqueOrThrow({ where: { id: centerB.id } }), beforeB);
       await request('PATCH', `/health-centers/${centerA.id}`, 403, a.accessToken, { isActive: false });
-      await request('PATCH', `/health-centers/${centerA.id}`, 400, a.accessToken, { name: null });
+      await request('PATCH', `/health-centers/${centerA.id}`, 400, d.accessToken, { name: null });
       const body = { code: `mm-new-${suffix}`, name: `New ${suffix}`, district: 'Integration' };
       await request('POST', '/health-centers', 403, a.accessToken, body);
       const created = await request<{ id: string }>('POST', '/health-centers', 201, d.accessToken, body);

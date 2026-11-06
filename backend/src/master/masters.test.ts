@@ -2,13 +2,15 @@ import 'reflect-metadata';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { BadRequestException, ConflictException, ForbiddenException, ValidationPipe } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import { Polarity, Prisma, Role } from '@prisma/client';
-import { Actor } from '../core/auth.decorators';
+import { Actor, ROLES_KEY } from '../core/auth.decorators';
 import { DbService } from '../core/db.service';
+import { MastersController } from './masters.controller';
 import { CreateIndicatorDto, CreateSectionDto, UpdateIndicatorDto, UpdateSectionDto } from './masters.dto';
 import { MastersService } from './masters.service';
 
-const actor: Actor = { id: 'admin', name: 'Admin', role: Role.ADMIN_PUSKESMAS, healthCenterId: 'tenant', sessionId: 'session', tokenVersion: 0 };
+const actor: Actor = { id: 'dinkes', name: 'Dinkes', role: Role.DINKES_ADMIN, healthCenterId: null, sessionId: 'session', tokenVersion: 0 };
 const payload = {
   id: 'CUSTOM-1_a.b', klasterId: 1, sectionCode: '1.1', no: '1', kegiatan: 'Activity', indikator: 'Indicator', satuan: '%',
   targetDisplay: '100%', targetNumeric: 1, totalSasaranDefault: 100, targetSasaranDefault: 100, polarity: Polarity.HIGHER_IS_BETTER,
@@ -18,6 +20,7 @@ const previous = { ...payload, targetNumeric: new Prisma.Decimal(1), totalSasara
 function fixture() {
   const logs: unknown[] = [];
   const locks: string[] = [];
+  let transactionCount = 0;
   const tx = {
     $queryRaw: async (sql: TemplateStringsArray) => { locks.push(sql.join('')); return []; },
     indicator: {
@@ -35,8 +38,8 @@ function fixture() {
     monthlyRecord: { findFirst: async (): Promise<{ id: string } | null> => null },
     auditLog: { create: async ({ data }: { data: object }) => { logs.push(data); return data; } },
   };
-  const db = { $transaction: async (operation: (client: typeof tx) => Promise<unknown>) => operation(tx) } as unknown as DbService;
-  return { service: new MastersService(db), tx, logs, locks };
+  const db = { $transaction: async (operation: (client: typeof tx) => Promise<unknown>) => { transactionCount++; return operation(tx); } } as unknown as DbService;
+  return { service: new MastersService(db), tx, logs, locks, get transactionCount() { return transactionCount; } };
 }
 
 const pipe = new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true, forbidUnknownValues: true });
@@ -57,18 +60,47 @@ test('section DTO rejects hierarchy updates and permits explicit nullable parent
   for (const body of [{ code: '1.2' }, { klasterId: 2 }, { parentCode: null }, { name: '  ' }, { order: null }]) await assert.rejects(validate(UpdateSectionDto, body), BadRequestException);
 });
 
-test('both admin roles may create globally, PIC cannot mutate and locks precede catalogue access', async () => {
-  for (const role of [Role.ADMIN_PUSKESMAS, Role.DINKES_ADMIN]) {
-    const { service, logs, locks } = fixture();
-    const result = await service.createIndicator({ ...actor, role }, payload);
-    assert.equal(result.scoringVersion, 'ILP_2026_V1');
-    assert.match(locks[0]!, /ORDER BY "year" ASC FOR UPDATE/);
-    assert.match(locks[1]!, /pg_advisory_xact_lock/);
-    assert.match(JSON.stringify(logs), /GLOBAL_ALL_TENANTS/);
+test('Dinkes creates globally and locks precede catalogue access', async () => {
+  const { service, logs, locks } = fixture();
+  const result = await service.createIndicator(actor, payload);
+  assert.equal(result.scoringVersion, 'ILP_2026_V1');
+  assert.match(locks[0]!, /ORDER BY "year" ASC FOR UPDATE/);
+  assert.match(locks[1]!, /pg_advisory_xact_lock/);
+  assert.match(JSON.stringify(logs), /GLOBAL_ALL_TENANTS/);
+});
+
+test('all master mutation controller handlers allow only Dinkes', () => {
+  const reflector = new Reflector();
+  for (const method of ['createIndicator', 'updateIndicator', 'archiveIndicator', 'createSection', 'updateSection', 'archiveSection'] as const) {
+    assert.deepEqual(reflector.getAllAndOverride(ROLES_KEY, [MastersController.prototype[method], MastersController]), [Role.DINKES_ADMIN], method);
   }
-  const { service, locks } = fixture();
-  assert.throws(() => service.archiveIndicator({ ...actor, role: Role.PIC }, payload.id), ForbiddenException);
-  assert.equal(locks.length, 0);
+});
+
+for (const role of [Role.ADMIN_PUSKESMAS, Role.PIC]) {
+  test(`${role} cannot perform any master mutation or open a transaction`, () => {
+    const context = fixture();
+    const { service } = context;
+    const denied: Actor = { ...actor, role, healthCenterId: 'tenant' };
+    for (const operation of [
+      () => service.createIndicator(denied, payload),
+      () => service.updateIndicator(denied, payload.id, { indikator: 'Forbidden' }),
+      () => service.archiveIndicator(denied, payload.id),
+      () => service.createSection(denied, { code: '1.2', klasterId: 1, name: 'Forbidden' }),
+      () => service.updateSection(denied, '1.1', { name: 'Forbidden' }),
+      () => service.archiveSection(denied, '1.1'),
+    ]) assert.throws(operation, ForbiddenException);
+    assert.equal(context.transactionCount, 0);
+    assert.deepEqual(context.locks, []);
+    assert.deepEqual(context.logs, []);
+  });
+}
+
+test('Dinkes may create and update a section', async () => {
+  const { service, logs } = fixture();
+  assert.equal((await service.createSection(actor, { code: '1.2', klasterId: 1, name: 'New section' })).code, '1.2');
+  assert.equal((await service.updateSection(actor, '1.1', { name: 'Updated section' })).name, 'Updated section');
+  assert.match(JSON.stringify(logs), /MASTER_SECTION_CREATED/);
+  assert.match(JSON.stringify(logs), /MASTER_SECTION_UPDATED/);
 });
 
 test('unknown tiered rules are rejected while existing tiered metadata can change', async () => {

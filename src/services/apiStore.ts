@@ -398,7 +398,7 @@ class ApiStore {
   getMasterIndicators = () => this.state.masterIndicators;
   getMasterSections = () => this.state.masterSections;
   private assertMasterAccess() {
-    if (this.getCurrentUser().role === 'PIC') throw new ApiError(403, 'PIC tidak dapat mengelola data master.');
+    if (this.getCurrentUser().role !== 'DINKES_ADMIN') throw new ApiError(403, 'Hanya Dinkes dapat mengelola data master.');
   }
   async fetchMasterCatalog() {
     this.assertMasterAccess();
@@ -429,7 +429,7 @@ class ApiStore {
       years: availableYears.map(y => this.yearView(y)), centers: items(centers).map(c => this.centerView(c)), user: this.userView(user), year, healthCenterId,
       ...(!healthCenterId ? { ...emptyScope(), load: { loading: false, error: null, scopeKey: `global:${year}` } } : {}),
     });
-    if (user.role !== 'PIC') await this.fetchMasterCatalog();
+    if (user.role === 'DINKES_ADMIN') await this.fetchMasterCatalog();
     if (epoch !== this.generation) return;
     // Finish any older scope read before replacing it with the refreshed catalog scope.
     if (this.flight) await this.flight;
@@ -737,8 +737,7 @@ class ApiStore {
   updateSubKlaster = (code: string, data: Wire) => this.catalogMutation(`/master/sections/${encodeURIComponent(code)}`, 'PATCH', pick(data, ['name', 'order', 'isActive']));
   deleteSubKlaster = (code: string) => this.catalogMutation(`/master/sections/${encodeURIComponent(code)}`, 'DELETE');
   updatePuskesmas = (id: string, data: Wire) => {
-    const user = this.getCurrentUser();
-    if (user.role !== 'DINKES_ADMIN' && (user.role !== 'ADMIN_PUSKESMAS' || user.healthCenterId !== id || data.isActive !== undefined)) throw new ApiError(403, 'Akses perubahan Puskesmas ditolak.');
+    this.assertMasterAccess();
     return this.catalogMutation(`/health-centers/${encodeURIComponent(id)}`, 'PATCH', pick(data, ['name', 'district', 'address', 'headName', 'headNip', 'phone', 'email', 'isActive']));
   };
   deletePuskesmas = (id: string) => {

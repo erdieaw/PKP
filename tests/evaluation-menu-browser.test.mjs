@@ -9,15 +9,20 @@ import { chromium } from 'playwright';
 const storeSource = `
 export const state = { role: 'ADMIN_PUSKESMAS', center: 'home', yearAvailable: true, active: true };
 export const writes = [];
+export const catalogReads = [];
 export class ApiError extends Error {}
 export const pkpStore = {
   subscribe: () => () => {}, getSnapshot: () => 0, getServerSnapshot: () => 0,
   getCurrentUser: () => ({ id: 'fixture-user', role: state.role, healthCenterId: 'home' }),
   getSelectedHealthCenterId: () => state.center,
+  getSelectedHealthCenter: () => state.center ? { id: state.center, name: 'Puskesmas Uji' } : undefined,
   getCurrentYear: () => 2026, getYears: () => state.yearAvailable ? [{ year: 2026 }] : [],
   isActiveYear: () => state.active, isMutating: () => false,
   getLoadState: () => ({ loading: false }), getIndicators: () => [],
   getSubKlasters: () => [], getPuskesmasList: () => [],
+  getMasterIndicators: () => [], getMasterSections: () => [],
+  fetchMasterCatalog: async () => { catalogReads.push(state.role); },
+  getAuditLogs: () => [],
   getPicsByHealthCenter: () => [], getAdminPuskesmasList: () => [],
   getRecommendations: () => [{ id: 'fixture-rec', sectionCode: '1.1', sectionName: 'Bagian Uji',
     klasterId: 1, quarter: 1, recommendationText: 'Rekomendasi uji', puskesmasRtl: '', status: 'PENDING' }],
@@ -31,7 +36,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { Sidebar } from '/src/components/layout/Sidebar.tsx';
 import { MasterDataHub } from '/src/components/master-data/MasterDataHub.tsx';
-import { state, writes } from 'virtual:evaluation-store';
+import { state, writes, catalogReads } from 'virtual:evaluation-store';
 import '/src/index.css';
 Object.assign(state, Object.fromEntries(new URLSearchParams(location.search)));
 state.yearAvailable = state.yearAvailable !== 'false';
@@ -42,6 +47,7 @@ createRoot(document.getElementById('root')).render(React.createElement('div', { 
     globalMode: !state.yearAvailable || !state.center, busy: false, selectedPuskesmas: 'Puskesmas Uji' })),
   React.createElement('main', { className: 'flex-1 min-w-0 p-4' }, React.createElement(MasterDataHub, { selectedMonth: 1 }))));
 window.evaluationWrites = writes;
+window.catalogReads = catalogReads;
 `;
 
 test('Evaluasi belongs to the admin Puskesmas master menu', async t => {
@@ -55,12 +61,10 @@ test('Evaluasi belongs to the admin Puskesmas master menu', async t => {
         resolveId(id) {
           if (id === '/evaluation-fixture.jsx') return '\0evaluation-fixture.jsx';
           if (id === 'virtual:evaluation-store' || /(?:^|\/)(?:apiStore|apiClient)(?:\.ts)?$/.test(id)) return '\0evaluation-store';
-          if (id === './CatalogManager') return '\0evaluation-catalog';
         },
         load(id) {
           if (id === '\0evaluation-fixture.jsx') return entrySource;
           if (id === '\0evaluation-store') return storeSource;
-          if (id === '\0evaluation-catalog') return 'export const CatalogManager = () => null;';
         },
         configureServer(vite) {
           vite.middlewares.use('/evaluation-test', async (_req, res) => {
@@ -68,7 +72,7 @@ test('Evaluasi belongs to the admin Puskesmas master menu', async t => {
             res.end(await vite.transformIndexHtml('/evaluation-test', '<html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="root"></div><script type="module" src="/evaluation-fixture.jsx"></script></body></html>'));
           });
         },
-      }, react()],
+      }, react({ exclude: [/node_modules/, /\/deps\//] })],
       server: { host: '127.0.0.1', port: 0 },
       optimizeDeps: { noDiscovery: true, include: ['react', 'react-dom/client', 'react/jsx-dev-runtime', 'lucide-react'] },
     });
@@ -77,7 +81,7 @@ test('Evaluasi belongs to the admin Puskesmas master menu', async t => {
     const origin = new URL(server.resolvedUrls.local[0]).origin;
     async function fixture(params = {}, width = 1440) {
       const page = await browser.newPage({ viewport: { width, height: 900 } });
-      page.setDefaultTimeout(15000);
+      page.setDefaultTimeout(30000);
       const errors = [];
       page.on('pageerror', error => errors.push(error.message));
       await page.route('**/*', route => {
@@ -86,8 +90,8 @@ test('Evaluasi belongs to the admin Puskesmas master menu', async t => {
         if (!url.hostname.endsWith('googleapis.com') && !url.hostname.endsWith('gstatic.com')) errors.push(`Unexpected request: ${url.pathname}`);
         return route.abort();
       });
-      await page.goto(`${origin}/evaluation-test?${new URLSearchParams(params)}`);
       try {
+        await page.goto(`${origin}/evaluation-test?${new URLSearchParams(params)}`, { waitUntil: 'domcontentloaded' });
         await page.getByRole('heading', { name: 'Pengelolaan Data', exact: true }).or(page.getByRole('alert')).waitFor();
       } catch (error) {
         await page.close();
@@ -100,6 +104,12 @@ test('Evaluasi belongs to the admin Puskesmas master menu', async t => {
       await t.test(`admin opens evaluation and edits RTL from Master at ${width}px`, async () => {
         const { page, errors } = await fixture({}, width);
         try {
+          for (const name of [/^Indikator \(/, /^Klaster dan Bagian \(/, /^Puskesmas \(/]) {
+            assert.equal(await page.locator('main').getByRole('button', { name }).count(), 0);
+          }
+          await page.getByRole('heading', { name: 'Kelola Staf PIC', exact: true }).waitFor();
+          assert.equal(await page.getByRole('button', { name: 'Tambah Staf PIC', exact: true }).isEnabled(), true);
+          assert.deepEqual(await page.evaluate(() => window.catalogReads), []);
           assert.equal(await page.locator('aside').getByRole('button', { name: 'Rekomendasi Dinkes & RTL', exact: true }).count(), 0);
           await page.locator('main').getByRole('button', { name: 'Evaluasi', exact: true }).click();
           await page.getByRole('heading', { name: 'Rekomendasi Dinas Kesehatan & Rencana Tindak Lanjut (RTL)', exact: true }).waitFor();
@@ -117,6 +127,19 @@ test('Evaluasi belongs to the admin Puskesmas master menu', async t => {
         } finally { await page.close(); }
       });
     }
+
+    await t.test('Dinkes retains all three master management tabs', async () => {
+      const { page, errors } = await fixture({ role: 'DINKES_ADMIN' });
+      try {
+        await page.getByRole('button', { name: 'Tambah Indikator', exact: true }).waitFor();
+        await page.getByRole('button', { name: /^Klaster dan Bagian \(/ }).click();
+        await page.getByRole('button', { name: 'Tambah Bagian', exact: true }).waitFor();
+        await page.getByRole('button', { name: /^Puskesmas \(/ }).click();
+        await page.getByRole('button', { name: 'Tambah Puskesmas', exact: true }).waitFor();
+        assert.ok((await page.evaluate(() => window.catalogReads)).every(role => role === 'DINKES_ADMIN'));
+        assert.deepEqual(errors, []);
+      } finally { await page.close(); }
+    });
 
     for (const [name, params] of [
       ['Dinkes', { role: 'DINKES_ADMIN' }], ['PIC', { role: 'PIC' }],
