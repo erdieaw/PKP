@@ -10,6 +10,7 @@ type Draft = typeof fresh;
 
 export function CatalogManager({ kind }: { kind: 'indicators' | 'subklasters' }) {
   useSyncExternalStore(pkpStore.subscribe, pkpStore.getSnapshot, pkpStore.getServerSnapshot);
+  const canManage = pkpStore.getCurrentUser().role === 'DINKES_ADMIN';
   const [editing, setEditing] = useState<MasterIndicator | SubKlasterMaster | null>(null);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<Draft>({ ...fresh });
@@ -22,12 +23,13 @@ export function CatalogManager({ kind }: { kind: 'indicators' | 'subklasters' })
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   useEffect(() => {
+    if (!canManage) return;
     let alive = true;
     setLoading(true); setOpen(false); setError('');
     pkpStore.fetchMasterCatalog().catch(e => { if (alive) setError(e.message); }).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [kind]);
-  if (pkpStore.getCurrentUser().role === 'PIC') return null;
+  }, [kind, canManage]);
+  if (!canManage) return null;
   const isIndicator = kind === 'indicators';
   const sections = [...pkpStore.getMasterSections()].sort((a, b) => compareNumericCodes(a.code, b.code) || a.id.localeCompare(b.id));
   const rows = isIndicator ? [...pkpStore.getMasterIndicators()].sort(compareIndicators) : sections;

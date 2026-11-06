@@ -16,7 +16,7 @@ export class OperationsController {
   constructor(private readonly operations: OperationsService) {}
 
   @Get('master/indicators') @ApiTags('Master')
-  @ApiOperation({ summary: 'Read the indicator catalogue', description: 'Defaults to active indicators in active sections. Administrators may includeArchived=true. Pagination is optional; without page/limit all matching indicators are returned.' })
+  @ApiOperation({ summary: 'Read the indicator catalogue', description: 'Defaults to active indicators in active sections. Only Dinkes administrators may includeArchived=true. Pagination is optional; without page/limit all matching indicators are returned.' })
   indicators(@CurrentActor() actor: Actor, @Query() query: IndicatorQuery) { return this.operations.indicators(actor, query); }
 
   @Get('master/sections') @ApiTags('Master')
@@ -48,7 +48,7 @@ export class OperationsController {
   @Post('health-centers') @Roles(Role.DINKES_ADMIN) @ApiTags('Master')
   createHealthCenter(@CurrentActor() actor: Actor, @Body() dto: CreateHealthCenterDto) { return this.operations.createHealthCenter(actor, dto); }
 
-  @Patch('health-centers/:id') @Roles(Role.ADMIN_PUSKESMAS, Role.DINKES_ADMIN) @ApiTags('Master')
+  @Patch('health-centers/:id') @Roles(Role.DINKES_ADMIN) @ApiTags('Master')
   updateHealthCenter(@CurrentActor() actor: Actor, @Param() params: IdParam, @Body() dto: UpdateHealthCenterDto) { return this.operations.updateHealthCenter(actor, params.id, dto); }
 
   @Delete('health-centers/:id') @Roles(Role.DINKES_ADMIN) @ApiTags('Master')

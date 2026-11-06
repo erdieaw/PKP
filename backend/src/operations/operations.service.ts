@@ -25,7 +25,7 @@ export class OperationsService {
   constructor(private readonly db: DbService) {}
 
   async indicators(actor: Actor, query: IndicatorQuery) {
-    if (query.includeArchived) requireRoles(actor, Role.ADMIN_PUSKESMAS, Role.DINKES_ADMIN);
+    if (query.includeArchived) requireRoles(actor, Role.DINKES_ADMIN);
     const filters: Prisma.IndicatorWhereInput[] = query.includeArchived ? [] : [{ isActive: true, section: { isActive: true } }];
     if (query.klasterId) filters.push({ klasterId: query.klasterId });
     if (query.section) filters.push(sectionFilter(query.section));
@@ -43,7 +43,7 @@ export class OperationsService {
   }
 
   sections(actor: Actor, query: ArchiveQuery) {
-    if (query.includeArchived) requireRoles(actor, Role.ADMIN_PUSKESMAS, Role.DINKES_ADMIN);
+    if (query.includeArchived) requireRoles(actor, Role.DINKES_ADMIN);
     return this.db.section.findMany({ where: query.includeArchived ? {} : { isActive: true }, orderBy: [{ order: 'asc' }, { code: 'asc' }] });
   }
   years() { return this.db.yearPeriod.findMany({ orderBy: { year: 'desc' } }); }
@@ -129,9 +129,8 @@ export class OperationsService {
   }
 
   updateHealthCenter(actor: Actor, id: string, dto: UpdateHealthCenterDto) {
-    requireRoles(actor, Role.ADMIN_PUSKESMAS, Role.DINKES_ADMIN);
+    requireRoles(actor, Role.DINKES_ADMIN);
     tenantFor(actor, id);
-    if (dto.isActive === false) requireRoles(actor, Role.DINKES_ADMIN);
     const fields = Object.entries(dto).filter(([, value]) => value !== undefined).map(([key]) => key);
     if (!fields.length) throw new BadRequestException('At least one editable field is required');
     return this.db.$transaction(async tx => {

@@ -25,7 +25,7 @@ export const MasterDataHub: React.FC<MasterDataHubProps> = ({ selectedMonth }) =
   const centerId = pkpStore.getSelectedHealthCenterId();
   const canManagePics = user.role === 'ADMIN_PUSKESMAS' && user.healthCenterId === centerId;
   const canEvaluate = canManagePics && pkpStore.getYears().some(period => period.year === pkpStore.getCurrentYear());
-  const [activeTab, setActiveTab] = useState<MasterTab>('indicators');
+  const [activeTab, setActiveTab] = useState<MasterTab>(isDinkes ? 'indicators' : 'users');
   const [userTab, setUserTab] = useState<'admins' | 'pics'>('admins');
   const [modal, setModal] = useState<'center' | 'user' | null>(null);
   const [editing, setEditing] = useState<PicUser | AdminPuskesmasUser | null>(null);
@@ -90,7 +90,7 @@ export const MasterDataHub: React.FC<MasterDataHubProps> = ({ selectedMonth }) =
   };
   const saveCenter = (event: React.FormEvent) => {
     event.preventDefault();
-    if ((!isDinkes && (!editingCenter || editingCenter.id !== user.healthCenterId)) || disabled) return;
+    if (!isDinkes || disabled) return;
     if (!center.name.trim() || !center.district.trim() || !/^[A-Za-z0-9_-]{1,50}$/.test(center.code.trim())) {
       setError('Isi nama, kecamatan, dan kode faskes 1-50 karakter (huruf, angka, garis bawah atau tanda hubung).'); return;
     }
@@ -109,7 +109,7 @@ export const MasterDataHub: React.FC<MasterDataHubProps> = ({ selectedMonth }) =
     <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-2">
       <div className="flex items-center gap-2 text-emerald-600 font-bold text-xs uppercase tracking-wider"><Database className="w-4 h-4" />Data SIPKP</div>
       <h2 className="text-xl font-bold text-slate-800">Pengelolaan Data</h2>
-      <p className="text-xs text-slate-500">Katalog indikator dan bagian berlaku untuk seluruh Puskesmas. Pengelolaan akun mengikuti kewenangan dan Puskesmas terpilih.</p>
+      <p className="text-xs text-slate-500">{isDinkes ? 'Katalog indikator, bagian, dan Puskesmas hanya dikelola Dinkes. Pengelolaan akun mengikuti Puskesmas terpilih.' : 'Kelola staf PIC, evaluasi, dan integrasi untuk Puskesmas Anda. Katalog indikator, bagian, dan Puskesmas dikelola Dinkes.'}</p>
       {success && <p role="status" className="flex items-center gap-2 p-3 bg-emerald-50 text-emerald-700 rounded-lg text-xs"><CheckCircle2 className="w-4 h-4" />{success}</p>}
     </div>
     {error && !modal && <p role="alert" className="p-3 bg-rose-50 text-rose-700 rounded-lg text-sm">{error}</p>}
@@ -120,15 +120,15 @@ export const MasterDataHub: React.FC<MasterDataHubProps> = ({ selectedMonth }) =
         ['puskesmas', `Puskesmas (${centers.length})`, Building2],
         ['users', 'Pengguna dan Staf PIC', Users],
         ['audit-logs', 'Riwayat Aktivitas', History],
-      ] as const).map(([id, label, Icon]) => <button key={id} disabled={pending} onClick={() => setActiveTab(id)} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap ${activeTab === id ? 'bg-slate-900 text-white' : 'bg-white text-slate-600 border border-slate-200'}`}><Icon className="w-3.5 h-3.5" />{label}</button>)}
+      ] as const).filter(([id]) => isDinkes || !['indicators', 'subklasters', 'puskesmas'].includes(id)).map(([id, label, Icon]) => <button key={id} disabled={pending} onClick={() => setActiveTab(id)} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap ${activeTab === id ? 'bg-slate-900 text-white' : 'bg-white text-slate-600 border border-slate-200'}`}><Icon className="w-3.5 h-3.5" />{label}</button>)}
       {canEvaluate && <button disabled={disabled} onClick={() => setActiveTab('evaluation')} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap ${activeTab === 'evaluation' ? 'bg-slate-900 text-white' : 'bg-white text-slate-600 border border-slate-200'}`}><MessageSquareCheck className="w-3.5 h-3.5" />Evaluasi</button>}
       {canManagePics && <button disabled={disabled} onClick={() => setActiveTab('province')} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap ${activeTab === 'province' ? 'bg-slate-900 text-white' : 'bg-white text-slate-600 border border-slate-200'}`}>Integrasi Provinsi</button>}
     </div>
 
-    {(activeTab === 'indicators' || activeTab === 'subklasters') && <CatalogManager kind={activeTab} />}
+    {isDinkes && (activeTab === 'indicators' || activeTab === 'subklasters') && <CatalogManager kind={activeTab} />}
     {activeTab === 'evaluation' && canEvaluate && <RecommendationView />}
     {activeTab === 'province' && canManagePics && <ProvinceIntegrationPanel key={`${user.id}:${centerId}:${pkpStore.getActivePeriod()?.revision}:${selectedMonth}`} selectedMonth={selectedMonth} />}
-    {activeTab === 'puskesmas' && <div className="space-y-4">
+    {activeTab === 'puskesmas' && isDinkes && <div className="space-y-4">
       <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-wrap items-center justify-between gap-3"><div><h3 className="font-bold text-sm text-slate-800">Daftar Puskesmas</h3><p className="text-xs text-slate-500">Saat Puskesmas diarsipkan, data dan riwayat aktivitas tetap disimpan. Semua sesi pengguna Puskesmas ini diakhiri dan pengguna tidak dapat masuk sampai Puskesmas dipulihkan.</p></div>{isDinkes && <button disabled={disabled} onClick={() => { setEditingCenter(null); setCenter({ ...emptyCenter }); setError(null); setModal('center'); }} className={buttonClass}><Plus className="w-3.5 h-3.5" />Tambah Puskesmas</button>}</div>
       <div className="space-y-2">{centers.map(c => <div key={c.id} className="p-3 bg-white border rounded-lg flex flex-wrap items-center gap-3"><span className="font-semibold">{c.name}</span><span className="text-xs">{c.isActive === false ? 'Diarsipkan' : 'Aktif'}</span>{(isDinkes || c.id === user.healthCenterId) && <button className="text-xs underline" disabled={disabled} onClick={() => { setEditingCenter(c); setCenter({ name: c.name, code: c.code, district: c.subdistrict, headName: c.headName ?? '', address: c.address ?? '' }); setModal('center'); }}>Ubah Profil</button>}{isDinkes && <button className="text-xs underline" disabled={disabled} onClick={() => { if (window.confirm(c.isActive === false ? `Pulihkan ${c.name}?` : `Arsipkan ${c.name}? Semua sesi pengguna Puskesmas ini diakhiri dan pengguna tidak dapat masuk sampai Puskesmas dipulihkan. Data dan riwayat aktivitas tetap disimpan.`)) void run(() => c.isActive === false ? pkpStore.updatePuskesmas(c.id, { isActive: true }) : pkpStore.deletePuskesmas(c.id), 'Status Puskesmas diperbarui.'); }}>{c.isActive === false ? 'Pulihkan' : 'Arsipkan'}</button>}</div>)}</div>
       <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto"><table className="w-full text-left text-xs"><thead className="bg-slate-100"><tr>{['Kode Faskes', 'Nama Puskesmas', 'Kecamatan', 'Kepala Puskesmas'].map(h => <th key={h} className="p-3">{h}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{centers.map(c => <tr key={c.id}><td className="p-3 font-mono">{c.code}</td><td className="p-3 font-bold">{c.name}</td><td className="p-3">{c.subdistrict}</td><td className="p-3">{c.headName || '-'}</td></tr>)}</tbody></table></div>
@@ -147,7 +147,7 @@ export const MasterDataHub: React.FC<MasterDataHubProps> = ({ selectedMonth }) =
 
     {activeTab === 'users' && canManageAccounts && <div className="space-y-2">{accounts.map(a => <div key={a.id} className="flex flex-wrap gap-3 text-xs items-center"><span>{a.name}</span><button disabled={disabled} className="underline" onClick={() => setResetAccount(a)}>Atur ulang kata sandi</button>{a.status !== 'ACTIVE' && <button disabled={disabled} className="underline" onClick={() => { if (window.confirm(`Aktifkan kembali akun ${a.name}?`)) void run(() => pkpStore.updatePic(a.id, { status: 'ACTIVE' }), 'Akun diaktifkan kembali.'); }}>Aktifkan Kembali</button>}</div>)}</div>}
     {resetAccount && <ResetPasswordDialog key={`${centerId}:${resetAccount.id}`} userId={resetAccount.id} name={resetAccount.name} onClose={() => setResetAccount(null)} onSuccess={setSuccess} />}
-    {modal && <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+    {modal && (modal !== 'center' || isDinkes) && <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
       <div role="dialog" aria-modal="true" aria-label={modal === 'center' ? 'Tambah Puskesmas' : 'Profil akun'} className="w-full max-w-xl max-h-[90vh] overflow-y-auto bg-white rounded-2xl shadow-2xl border border-slate-200">
         <div className="p-5 bg-slate-50 border-b flex items-center justify-between"><h3 className="font-bold text-slate-800">{modal === 'center' ? editingCenter ? 'Ubah Profil Puskesmas' : 'Tambah Puskesmas' : editing ? 'Ubah Profil Akun' : managingAdmins ? 'Buat Akun Administrator Puskesmas' : 'Tambah Staf PIC'}</h3><button disabled={pending} onClick={closeModal} aria-label="Tutup" className="p-2 rounded-lg hover:bg-slate-200"><X className="w-5 h-5" /></button></div>
         <form onSubmit={modal === 'center' ? saveCenter : saveAccount} className="p-5">

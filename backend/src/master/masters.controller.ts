@@ -6,7 +6,7 @@ import { CreateIndicatorDto, CreateSectionDto, IndicatorIdParam, SectionCodePara
 import { MastersService } from './masters.service';
 
 @ApiTags('Shared masters')
-@Roles(Role.ADMIN_PUSKESMAS, Role.DINKES_ADMIN)
+@Roles(Role.DINKES_ADMIN)
 @Controller('master')
 export class MastersController {
   constructor(private readonly masters: MastersService) {}
